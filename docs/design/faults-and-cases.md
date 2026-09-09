@@ -82,8 +82,11 @@ Bytes a JSON parser rejects.
 
 | Param | Values | Default |
 |---|---|---|
-| `kind` | `unbalanced` · `trailing_garbage` · `bad_utf8` · `nul_byte` · `deep_nest` · `duplicate_key` | `unbalanced` |
+| `how` | `unbalanced` · `trailing_garbage` · `bad_utf8` · `nul_byte` · `deep_nest` · `duplicate_key` | `unbalanced` |
 | `depth` | integer, for `deep_nest` | `1000` |
+
+The parameter is `how`, not `kind`: `kind` selects the mechanism itself in a `[case.fault]` table,
+so a parameter by that name could never be set. Enforced by a registry test.
 
 `duplicate_key` is technically valid JSON with undefined semantics, which is more interesting than
 invalid JSON: implementations disagree about last-wins versus first-wins, and that disagreement is

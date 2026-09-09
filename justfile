@@ -66,6 +66,10 @@ repl transcript="testdata/transcripts/truncate-mid-event.jsonl":
 # Maintain
 # -----------------------------
 
+# Regenerate the case-manifest JSON Schema from the registries
+case-schema:
+    {{go}} run ./internal/catalogue/gencaseschema cases/case.schema.json
+
 # Refresh the vendored MCP schemas (manual by design; see schema/VENDORED.md)
 vendor-schemas:
     #!/usr/bin/env bash

@@ -14,6 +14,7 @@ decision to be revisited.
 | ADR-006 | TOML for policy and case manifests | Control plane |
 | ADR-007 | Case identity: stable slug, revision at citation | Case identity |
 | ADR-008 | Truncation variants are case parameters, not separate faults | Fault taxonomy |
+| ADR-009 | Registries live with the code they describe | Package boundaries |
 
 ---
 
@@ -182,6 +183,15 @@ matcher must fail loudly at load, never silently match nothing.
 sibling. Rejected for YAML's type coercion surprises in a file where a mistyped matcher silently
 disables a test.
 
+**Amended 2026-09-09.** "No JSON Schema equivalent" overstated the cost. Taplo validates TOML
+against a JSON Schema via a `#:schema` directive, and the schema is generated from the registries
+(ADR-009) rather than written by hand, so authors get completion and hover documentation without a
+second source of truth. JSON as a format was reconsidered and rejected: it would surrender comments
+in the one file that doubles as documentation, and it does not solve the two problems it appears to —
+registry single-sourcing is format-independent, and JSON Schema validators report pointer paths, not
+line numbers, so the semantic-error position gap is identical in either format. See
+`policy-format.md` §6.
+
 ---
 
 ## ADR-007 — Case identity
@@ -211,3 +221,46 @@ fourth code path rather than a fourth line of TOML.
 
 This generalises into the rule the whole catalogue follows: **if it changes bytes, it is a mechanism
 parameter; if it changes what you would claim in a bug report, it is a case.**
+
+---
+
+## ADR-009 — Registries live with the code they describe
+
+**Question.** The loader validates case manifests against three tables: fault mechanisms and their
+parameters, matcher keys and scopes, and invariant names. Where do those tables live?
+
+**Decision.** With the code they describe, from v0:
+
+| Registry | Package | Why there |
+|---|---|---|
+| Mechanisms, parameters, values | `internal/fault` | The mechanism implementations are there |
+| Match keys and scopes | `internal/engine` | The engine evaluates `[case.match]` |
+| Invariant names | `internal/oracle/invariant` | The invariant implementations are there |
+
+The catalogue imports all three and validates manifests against them. `[case.expect]`'s key list
+stays in the catalogue — it names things owned elsewhere but is itself manifest surface.
+
+**Why.** A parameter table maintained apart from the code it describes drifts, and here drift
+inverts the format's best property: a value added to the fault code but not the table makes a valid
+case fail to load — strict validation gone wrong-way. One registry, defined where the behaviour is
+implemented, consumed by the loader and by the schema generator (`policy-format.md` §6), means the
+loader, the editor tooling and the implementation cannot disagree.
+
+The registries carry doc strings — mechanism, parameter, value and invariant summaries — because
+they are the single place that knowledge lives; the generated schema turns them into editor hover
+documentation for free. The indirection costs a few files and some structs. v0 has no hot path, and
+correctness of the catalogue is worth more than compactness.
+
+**Dependency direction, fixed here.** The catalogue is the outer layer: it parses manifests and
+compiles them into the domain packages' terms. `fault`, `engine` and `invariant` never import the
+catalogue — the engine consumes compiled policy as its own types and knows nothing about TOML. This
+is what keeps the future engine ⇄ catalogue import cycle structurally impossible rather than merely
+avoided.
+
+**Incidental fix.** Moving the mechanism registry surfaced a collision: `malformed_json`'s parameter
+was named `kind`, which the `[case.fault]` table already uses to select the mechanism, so the
+parameter could never be set. Renamed to `how`; a registry test now rejects any parameter named
+`kind`.
+
+**Revisit if.** A registry needs to describe something with no owning package — that would be a
+sign the package layout, not the registry placement, is wrong.

@@ -179,21 +179,28 @@ subject that charpy cannot verify.
 
 ## 4. Validation
 
-Three layers, all at load, none at run:
+Four layers, all at load, none at run:
 
 1. **Strict decode.** `DisallowUnknownFields`. A typo in a key is an error, not a silently ignored
    line. This is the single most valuable property of the format: a matcher that silently matches
    nothing is a test that silently passes.
-2. **Semantic checks.**
+2. **Registry checks.** The tables validated against live with the code they describe — mechanisms
+   and their parameters in `internal/fault`, match keys and scopes in `internal/engine`, invariant
+   names in `internal/oracle/invariant` — and the loader consumes them, so validation cannot drift
+   from implementation (`decisions.md` ADR-009). Covers:
+   - `fault.kind` names a real mechanism, its parameters exist, enumerated values are in range, and
+     free-form values have the declared type.
+   - `[case.match]` keys exist, enumerated keys (`face`, `direction`, `kind`, `scope`) are in
+     range, and ordinal keys are integers.
+   - `expect.invariants` names real invariants.
+3. **Semantic checks.**
    - `verdict = "MUST"` requires a `schema:` source (`oracle.md` §2). Enforced here rather than in
      review, because "never issue a behavioural MUST" is a rule about the product, not about
      authors' memories.
    - `id` is unique across every loaded file, and well-formed per the `case-identity.md` grammar.
    - `applies_to` parses and names revisions charpy knows.
-   - `fault.kind` names a real mechanism and its parameters typecheck against that mechanism.
-   - `expect.invariants` names real invariants.
    - `occurrence` and `occurrence_every` are mutually exclusive.
-3. **Warnings**, which do not fail the load: an empty `[case.match]`; a case whose `applies_to`
+4. **Warnings**, which do not fail the load: an empty `[case.match]`; a case whose `applies_to`
    excludes every revision charpy knows; a `withdrawn` case still selected.
 
 ```
@@ -233,3 +240,39 @@ the manual version of what liveness testing does automatically.
 The control plane binds to localhost by default. It executes fault injection against whatever charpy
 is pointed at, so exposing it on `0.0.0.0` is a decision a user must make explicitly with
 `--control-addr`.
+
+---
+
+## 6. Authoring tooling
+
+ADR-006 accepted that TOML has no JSON Schema equivalent, expecting validation to be Go code only.
+That turned out to be half the cost it looked like: **Taplo** — the TOML language server behind the
+Even Better TOML editor extension — validates and autocompletes TOML against a JSON Schema, wired by
+a directive on the file's first line:
+
+```toml
+#:schema ./case.schema.json
+```
+
+The schema is not hand-written. `just case-schema` generates `cases/case.schema.json` from the same
+registries the loader validates against (§4), so the editor tooling, the loader and the
+implementation share one source of truth. The registries carry doc strings for every mechanism,
+parameter, enumerated value and invariant; the generator emits them as `description` fields, so
+hovering `cut_at = "event_boundary"` in an editor shows what the value means and which transport it
+applies to.
+
+Kept honest by two tests in `internal/catalogue`:
+
+- **Staleness.** The committed schema must byte-match what the registries currently generate.
+  Changing a registry without running `just case-schema` fails CI.
+- **Agreement.** Every shipped manifest must validate against the generated schema, and a set of
+  deliberately broken documents must not. The schema can neither lag the loader nor rot into
+  accepting everything.
+
+The schema covers structure — keys, types, enums, required fields. The cross-file and semantic
+rules (id uniqueness, `applies_to` resolution, MUST-requires-`schema:`) remain the loader's job,
+and `charpy policy validate` remains the authority; Taplo is the fast feedback in front of it.
+
+`taplo` is in the Nix shell. `taplo lint cases/*.toml` checks from the CLI what the editor checks
+interactively; user-supplied run policies get the same tooling by adding the directive pointing at
+a vendored or URL copy of the schema.

@@ -233,16 +233,10 @@ func validate(cs *Case, file string) (errs, warnings []string) {
 		}
 	}
 
-	for _, e := range checkKeys(cs.Match, matchKeys, "[case.match]") {
+	for _, e := range checkMatch(cs.Match) {
 		fail("case %q: %s", cs.ID, e)
 	}
-	for _, e := range checkScope(cs.Match) {
-		fail("case %q: %s", cs.ID, e)
-	}
-	for _, e := range checkKeys(cs.Expect, expectKeys, "[case.expect]") {
-		fail("case %q: %s", cs.ID, e)
-	}
-	for _, e := range checkInvariants(cs.Expect) {
+	for _, e := range checkExpect(cs.Expect) {
 		fail("case %q: %s", cs.ID, e)
 	}
 

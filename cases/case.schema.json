@@ -1,0 +1,646 @@
+{
+  "$id": "https://raw.githubusercontent.com/serverplumber/charpy/main/cases/case.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Generated from charpy's mechanism, matcher and invariant registries by `just case-schema`. Do not edit by hand.",
+  "properties": {
+    "case": {
+      "description": "The case entries. One [[case]] per case.",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "applies_to": {
+            "description": "Revision range this case applies to, resolved against the ordered revision list (2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25, 2026-07-28, draft). Forms: \"*\", \"=R\", \"\u003e=R\", \"\u003e=R,\u003cR\".",
+            "type": "string"
+          },
+          "derives_from": {
+            "description": "Where the expectation comes from: spec:, sep:, schema:, or the deliberately ugly \"none\" for behaviour with no normative source.",
+            "pattern": "^(spec:.+|sep:.+|schema:.+|none)$",
+            "type": "string"
+          },
+          "expect": {
+            "additionalProperties": false,
+            "description": "What the oracle should check for this case. Optional; the universal invariants run regardless.",
+            "properties": {
+              "expect_error_code": {
+                "description": "The subject is expected to answer with this JSON-RPC error code.",
+                "type": "integer"
+              },
+              "expect_http_status": {
+                "description": "The subject is expected to answer with this HTTP status. HTTP only.",
+                "type": "integer"
+              },
+              "invariants": {
+                "description": "Invariant names that must hold for this case. The universal invariants run regardless.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "const": "id-resolves-once",
+                      "description": "Every request id resolves exactly once — result or error, never both, never neither."
+                    },
+                    {
+                      "const": "no-unsolicited-response",
+                      "description": "No response or error carries an id that was never requested on that face."
+                    },
+                    {
+                      "const": "no-duplicate-inflight-id",
+                      "description": "No two requests share an id while both are in flight on one connection."
+                    },
+                    {
+                      "const": "cancel-honoured",
+                      "description": "No result is delivered for a request after its cancellation was acknowledged. On 2026-07-28 HTTP the cancellation signal is the stream close itself."
+                    },
+                    {
+                      "const": "no-credential-leak",
+                      "description": "No upstream credential, Authorization header, session identifier, or internal address appears in any downstream frame."
+                    },
+                    {
+                      "const": "session-identity-isolation",
+                      "description": "A session established under identity A never observes a frame or stream belonging to identity B. Sessioned revisions only."
+                    },
+                    {
+                      "const": "merged-manifest-consistency",
+                      "description": "Across a list_changed fan-out there is no window in which a tool name resolves to the wrong upstream."
+                    },
+                    {
+                      "const": "header-body-consistency",
+                      "description": "Mirrored headers agree with the body on both faces; a rewritten body gets re-derived Mcp-Method/Mcp-Name; unrecognised Mcp-Param-* headers are forwarded."
+                    },
+                    {
+                      "const": "cache-scope-isolation",
+                      "description": "A result carrying cacheScope \"private\" is never served to a different identity, and no result is served after its ttlMs has elapsed."
+                    },
+                    {
+                      "const": "subscription-id-remap",
+                      "description": "An upstream subscriptionId never appears downstream, and a notification is delivered only to the subscriber that opted into its type."
+                    },
+                    {
+                      "const": "mrtr-state-isolation",
+                      "description": "requestState and inputResponses never cross identities across an MRTR retry."
+                    },
+                    {
+                      "const": "loglevel-gating",
+                      "description": "No notifications/message is emitted for a request that did not carry a logLevel."
+                    },
+                    {
+                      "const": "trace-context-propagation",
+                      "description": "traceparent survives the subject. Informational — always OBSERVED, never a failure."
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "liveness_probe_within_ms": {
+                "description": "Real-time budget for recovery after withdrawal. Generous by design: the verdict asserts recovery happened, not how fast.",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "fault": {
+            "description": "The mechanism and its parameters. kind selects the mechanism; the remaining keys are that mechanism's parameters. See docs/design/faults-and-cases.md.",
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "hang",
+                    "description": "Hold a response open and never deliver it. The liveness half of the suite depends on this mechanism's withdrawal behaviour."
+                  },
+                  "scope": {
+                    "anyOf": [
+                      {
+                        "const": "response",
+                        "description": "Only the matched response is withheld."
+                      },
+                      {
+                        "const": "stream",
+                        "description": "The whole stream goes silent."
+                      },
+                      {
+                        "const": "connection",
+                        "description": "The whole connection goes silent."
+                      }
+                    ],
+                    "description": "What is held open. Default: response."
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "const": "deliver",
+                        "description": "The withheld response is finally delivered."
+                      },
+                      {
+                        "const": "close",
+                        "description": "The stream or connection is closed without delivering."
+                      },
+                      {
+                        "const": "error",
+                        "description": "A JSON-RPC error is delivered instead of the result."
+                      }
+                    ],
+                    "description": "What happens at withdrawal. Default: deliver."
+                  },
+                  "withdraw_after_ms": {
+                    "description": "Injected-clock ms until the fault is withdrawn; 0 means never. fault_withdrawn is emitted at the withdrawal instant and is where the liveness clock starts. Default: 0.",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "after_bytes": {
+                    "description": "Exact cut point for cut_at = \"byte\"; seeded otherwise. Default: seeded.",
+                    "type": "integer"
+                  },
+                  "cut_at": {
+                    "anyOf": [
+                      {
+                        "const": "byte",
+                        "description": "Cut at exactly after_bytes, wherever that lands. Both transports."
+                      },
+                      {
+                        "const": "mid_frame",
+                        "description": "Cut at a seeded point inside the JSON body. Both transports."
+                      },
+                      {
+                        "const": "mid_line",
+                        "description": "Cut before the terminating newline — the frame never delimits. stdio only."
+                      },
+                      {
+                        "const": "mid_event",
+                        "description": "Cut inside an SSE data: value. HTTP only."
+                      },
+                      {
+                        "const": "field_boundary",
+                        "description": "Cut after event: and before data: — a structurally incomplete SSE event. HTTP only."
+                      },
+                      {
+                        "const": "event_boundary",
+                        "description": "Cut cleanly between events — every event delivered was well formed, the stream simply stops. HTTP only."
+                      },
+                      {
+                        "const": "mid_comment",
+                        "description": "Cut inside a `:` keep-alive comment line. HTTP only; 2026-07-28 encourages these."
+                      }
+                    ],
+                    "description": "Where the cut lands. Default: mid_frame."
+                  },
+                  "kind": {
+                    "const": "truncate",
+                    "description": "Stop mid-frame: emit what was written, then close or stall."
+                  },
+                  "then": {
+                    "anyOf": [
+                      {
+                        "const": "close",
+                        "description": "Close the stream."
+                      },
+                      {
+                        "const": "stall",
+                        "description": "Hold the stream open silently."
+                      }
+                    ],
+                    "description": "What follows the cut. Default: close."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "depth": {
+                    "description": "Nesting depth for how = \"deep_nest\". Default: 1000.",
+                    "type": "integer"
+                  },
+                  "how": {
+                    "anyOf": [
+                      {
+                        "const": "unbalanced",
+                        "description": "Unbalanced braces."
+                      },
+                      {
+                        "const": "trailing_garbage",
+                        "description": "A valid document followed by garbage."
+                      },
+                      {
+                        "const": "bad_utf8",
+                        "description": "An invalid UTF-8 sequence."
+                      },
+                      {
+                        "const": "nul_byte",
+                        "description": "An embedded NUL byte."
+                      },
+                      {
+                        "const": "deep_nest",
+                        "description": "Nesting deep enough to test recursion limits; see depth."
+                      },
+                      {
+                        "const": "duplicate_key",
+                        "description": "Technically valid JSON with undefined semantics: implementations disagree about last-wins versus first-wins, which is differential-table material rather than a bug."
+                      }
+                    ],
+                    "description": "Which way the bytes are wrong. Default: unbalanced."
+                  },
+                  "kind": {
+                    "const": "malformed_json",
+                    "description": "Bytes a JSON parser rejects."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "how": {
+                    "anyOf": [
+                      {
+                        "const": "wrong_type",
+                        "description": "A value of the wrong type."
+                      },
+                      {
+                        "const": "missing_required",
+                        "description": "A required field absent."
+                      },
+                      {
+                        "const": "extra_required_absent",
+                        "description": "An extra field where the schema forbids additions."
+                      },
+                      {
+                        "const": "enum_out_of_range",
+                        "description": "A value outside a declared enum."
+                      }
+                    ],
+                    "description": "Which way the value violates it. Default: wrong_type."
+                  },
+                  "kind": {
+                    "const": "schema_violation",
+                    "description": "Valid JSON that violates a declared schema: it passes every parser and fails only the oracle."
+                  },
+                  "target": {
+                    "anyOf": [
+                      {
+                        "const": "envelope",
+                        "description": "The JSON-RPC envelope."
+                      },
+                      {
+                        "const": "result",
+                        "description": "The result shape for the method."
+                      },
+                      {
+                        "const": "declared_output_schema",
+                        "description": "The subject's own outputSchema from tools/list — the sharpest target, MUST-eligible because the rejecting artifact is the subject's own declaration."
+                      },
+                      {
+                        "const": "tool_input_schema",
+                        "description": "The tool's declared inputSchema."
+                      }
+                    ],
+                    "description": "Which declaration is violated. Default: result."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "duplicate_id",
+                    "description": "Reuse a JSON-RPC id."
+                  },
+                  "mode": {
+                    "anyOf": [
+                      {
+                        "const": "concurrent_request",
+                        "description": "Two requests share an id while both are in flight."
+                      },
+                      {
+                        "const": "double_response",
+                        "description": "The same request id is answered twice."
+                      },
+                      {
+                        "const": "reuse_after_close",
+                        "description": "An id is reused after its exchange closed."
+                      }
+                    ],
+                    "description": "How the id is reused. Default: double_response."
+                  },
+                  "vary_type": {
+                    "description": "Send 7 and then \"7\": an implementation keying its pending map on a stringified id treats these as the same request; one keying on the typed value does not. Both are defensible, which makes it differential material. Default: false.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "id_source": {
+                    "anyOf": [
+                      {
+                        "const": "never_used",
+                        "description": "An id that never appeared on the wire."
+                      },
+                      {
+                        "const": "already_resolved",
+                        "description": "A late duplicate for an id correctly resolved earlier — the one that finds pending-map leaks."
+                      },
+                      {
+                        "const": "reserved_null",
+                        "description": "The null id, which JSON-RPC reserves."
+                      }
+                    ],
+                    "description": "Where the bogus id comes from. Default: never_used."
+                  },
+                  "kind": {
+                    "const": "unsolicited_response",
+                    "description": "A response or error for an id never requested."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "manifest_mutate",
+                    "description": "Change the tool, prompt or resource list mid-session."
+                  },
+                  "list": {
+                    "anyOf": [
+                      {
+                        "const": "tools",
+                        "description": "The tool list."
+                      },
+                      {
+                        "const": "prompts",
+                        "description": "The prompt list."
+                      },
+                      {
+                        "const": "resources",
+                        "description": "The resource list."
+                      }
+                    ],
+                    "description": "Which list mutates. Default: tools."
+                  },
+                  "notify": {
+                    "anyOf": [
+                      {
+                        "const": "list_changed",
+                        "description": "notifications/*/list_changed is sent."
+                      },
+                      {
+                        "const": "silent",
+                        "description": "No notification. Not adversarial: at least one production gateway polls its upstreams rather than trusting list_changed, so this matches deployed reality."
+                      },
+                      {
+                        "const": "subscriptions_listen",
+                        "description": "The 2026-07-28 path: the change arrives on the subscriptions/listen response stream."
+                      }
+                    ],
+                    "description": "Whether and how the peer is told. Default: list_changed."
+                  },
+                  "op": {
+                    "anyOf": [
+                      {
+                        "const": "add",
+                        "description": "An entry appears."
+                      },
+                      {
+                        "const": "remove",
+                        "description": "An entry disappears."
+                      },
+                      {
+                        "const": "rename",
+                        "description": "An entry changes name."
+                      },
+                      {
+                        "const": "change_schema",
+                        "description": "An entry's declared schema changes shape."
+                      }
+                    ],
+                    "description": "The mutation. Default: remove."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "direction_of_change": {
+                    "anyOf": [
+                      {
+                        "const": "narrow",
+                        "description": "Fewer than before — the dangerous one: the subject cached a capability and keeps using it after the peer stopped offering it."
+                      },
+                      {
+                        "const": "widen",
+                        "description": "More than before."
+                      },
+                      {
+                        "const": "incompatible",
+                        "description": "A set the first connection could not have negotiated."
+                      }
+                    ],
+                    "description": "Which way it changes. Default: narrow."
+                  },
+                  "field": {
+                    "anyOf": [
+                      {
+                        "const": "capabilities",
+                        "description": "The capability set."
+                      },
+                      {
+                        "const": "protocol_version",
+                        "description": "The protocol version — the era-mismatch case."
+                      },
+                      {
+                        "const": "server_info",
+                        "description": "The server identity."
+                      },
+                      {
+                        "const": "extensions",
+                        "description": "Declared extensions."
+                      }
+                    ],
+                    "description": "What changes across the reconnect. Default: capabilities."
+                  },
+                  "kind": {
+                    "const": "capability_flip",
+                    "description": "Reconnect as a peer claiming different capabilities."
+                  }
+                },
+                "required": [
+                  "kind"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "id": {
+            "description": "Permanent case ID, family/name. Never contains a date and never changes once released; revision and seed qualify it at citation time. See docs/design/case-identity.md.",
+            "pattern": "^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*$",
+            "type": "string"
+          },
+          "match": {
+            "additionalProperties": false,
+            "description": "Selects which frame the fault attaches to. All present keys must match; absent keys match anything. Empty matches the first frame on any face, which is almost never intended.",
+            "properties": {
+              "after_mono_ms": {
+                "description": "Not before this point on the injected clock, in ms from run start.",
+                "type": "integer"
+              },
+              "client_id": {
+                "description": "Which synthetic client, exact or a * glob. Always c0 in v0.",
+                "type": "string"
+              },
+              "direction": {
+                "description": "The MCP role direction, independent of who charpy is impersonating.",
+                "enum": [
+                  "c2s",
+                  "s2c"
+                ]
+              },
+              "face": {
+                "description": "Which side of the subject, defined against the subject: downstream is its client-facing side, upstream its server-facing side.",
+                "enum": [
+                  "downstream",
+                  "upstream"
+                ]
+              },
+              "kind": {
+                "description": "The JSON-RPC frame kind.",
+                "enum": [
+                  "request",
+                  "response",
+                  "error",
+                  "notification"
+                ]
+              },
+              "method": {
+                "description": "Exact method name, or a * glob. Responses match by the method of the request their id resolves.",
+                "type": "string"
+              },
+              "occurrence": {
+                "description": "1-based ordinal: the Nth matching frame within the scope. Mutually exclusive with occurrence_every.",
+                "type": "integer"
+              },
+              "occurrence_every": {
+                "description": "Every Nth matching frame within the scope. Mutually exclusive with occurrence.",
+                "type": "integer"
+              },
+              "scope": {
+                "description": "The population an occurrence counts within. Defaults to run; in v0 every scope collapses to it.",
+                "enum": [
+                  "run",
+                  "client",
+                  "session",
+                  "connection"
+                ]
+              },
+              "session_id": {
+                "description": "Which logical session, exact or a * glob.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "status": {
+            "description": "Withdrawn cases still parse, so old transcripts keep resolving.",
+            "enum": [
+              "active",
+              "withdrawn"
+            ]
+          },
+          "subject": {
+            "description": "Subject classes the case applies to.",
+            "items": {
+              "enum": [
+                "server",
+                "client",
+                "gateway"
+              ]
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "summary": {
+            "description": "One sentence; appears in the report and in JUnit.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "transport": {
+            "description": "Transports the case applies to. Defaults to both.",
+            "items": {
+              "enum": [
+                "stdio",
+                "http"
+              ]
+            },
+            "type": "array"
+          },
+          "verdict": {
+            "anyOf": [
+              {
+                "const": "MUST",
+                "description": "Schema-mechanical only: requires a schema: source, enforced at load. charpy never issues a behavioural MUST."
+              },
+              {
+                "const": "OBSERVED",
+                "description": "Everything else, with the divergence table attached where one exists."
+              }
+            ],
+            "description": "Which verdict bucket a finding lands in. Two buckets, nothing between."
+          },
+          "withdrawn_reason": {
+            "description": "Required when status = \"withdrawn\".",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "applies_to",
+          "subject",
+          "verdict",
+          "derives_from",
+          "summary",
+          "fault"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "schema_version": {
+      "const": 1,
+      "description": "Manifest format version."
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "title": "charpy case manifest",
+  "type": "object"
+}

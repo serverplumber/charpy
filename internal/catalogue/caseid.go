@@ -67,9 +67,6 @@ func ParseID(s string) (ID, error) {
 	if !isKebab(name) {
 		return ID{}, fmt.Errorf("case id %q: name %q must be lowercase kebab-case", s, name)
 	}
-	if strings.Contains(name, "/") {
-		return ID{}, fmt.Errorf("case id %q: exactly one %q separator allowed", s, "/")
-	}
 	return ID{Family: Family(fam), Name: name}, nil
 }
 

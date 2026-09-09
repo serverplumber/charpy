@@ -1,3 +1,4 @@
+#:schema ./case.schema.json
 # charpy v0 case catalogue -- sessioned era.
 #
 # v0 targets 2025-06-18 and 2025-11-25, where the deployed population is and
