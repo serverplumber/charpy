@@ -1,0 +1,232 @@
+# charpy v0 case catalogue -- sessioned era.
+#
+# v0 targets 2025-06-18 and 2025-11-25, where the deployed population is and
+# where the classic gateway seam bugs live. See docs/design/revisions.md.
+#
+# Case IDs here are permanent. Revision and seed qualify them at citation
+# time: stream/truncate-mid-event@2025-11-25#seed=8f2c1a
+
+schema_version = 1
+
+# --- stream -----------------------------------------------------------------
+
+[[case]]
+id           = "stream/truncate-mid-event"
+applies_to   = ">=2025-03-26"
+subject      = ["server", "gateway"]
+transport    = ["http"]
+verdict      = "OBSERVED"
+derives_from = "spec:2025-11-25/basic/transports#streamable-http"
+summary      = "SSE stream cut inside an event's data field."
+
+  [case.match]
+  method     = "tools/call"
+  face       = "downstream"
+  direction  = "s2c"
+  occurrence = 2
+  scope      = "session"
+
+  [case.fault]
+  kind   = "truncate"
+  cut_at = "mid_event"
+  then   = "close"
+
+  [case.expect]
+  invariants               = ["id-resolves-once"]
+  liveness_probe_within_ms = 30000
+
+[[case]]
+id           = "stream/truncate-event-boundary"
+applies_to   = ">=2025-03-26"
+subject      = ["server", "gateway"]
+transport    = ["http"]
+verdict      = "OBSERVED"
+derives_from = "spec:2025-11-25/basic/transports#streamable-http"
+summary      = "SSE stream stops cleanly between events; every event delivered was well formed."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "s2c"
+
+  [case.fault]
+  kind   = "truncate"
+  cut_at = "event_boundary"
+  then   = "close"
+
+  [case.expect]
+  invariants               = ["id-resolves-once"]
+  liveness_probe_within_ms = 30000
+
+[[case]]
+id           = "stream/truncate-mid-line"
+applies_to   = "*"
+subject      = ["server"]
+transport    = ["stdio"]
+verdict      = "OBSERVED"
+derives_from = "spec:2025-11-25/basic/transports#stdio"
+summary      = "stdio frame cut before its terminating newline; the frame never delimits."
+
+  [case.match]
+  face      = "downstream"
+  direction = "s2c"
+
+  [case.fault]
+  kind   = "truncate"
+  cut_at = "mid_line"
+  then   = "stall"
+
+# --- id ---------------------------------------------------------------------
+
+[[case]]
+id           = "id/duplicate-response"
+applies_to   = "*"
+subject      = ["server", "gateway"]
+verdict      = "OBSERVED"
+derives_from = "sep:0"
+summary      = "The same request id is answered twice."
+
+  [case.match]
+  method    = "tools/call"
+  direction = "s2c"
+
+  [case.fault]
+  kind = "duplicate_id"
+  mode = "double_response"
+
+  [case.expect]
+  invariants = ["id-resolves-once"]
+
+[[case]]
+id           = "id/duplicate-response-vary-type"
+applies_to   = "*"
+subject      = ["server", "gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "The id is answered as 7 and then as \"7\"; implementations disagree on whether these collide."
+
+  [case.match]
+  method    = "tools/call"
+  direction = "s2c"
+
+  [case.fault]
+  kind      = "duplicate_id"
+  mode      = "double_response"
+  vary_type = true
+
+[[case]]
+id           = "id/unsolicited-after-resolved"
+applies_to   = "*"
+subject      = ["server", "gateway", "client"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "A late response arrives for an id that was correctly resolved earlier; finds pending-map leaks."
+
+  [case.match]
+  direction = "s2c"
+
+  [case.fault]
+  kind      = "unsolicited_response"
+  id_source = "already_resolved"
+
+  [case.expect]
+  invariants = ["no-unsolicited-response"]
+
+# --- frame ------------------------------------------------------------------
+
+[[case]]
+id           = "frame/malformed-unbalanced"
+applies_to   = "*"
+subject      = ["server", "gateway", "client"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "A frame with unbalanced braces; must not wedge the parser or the connection."
+
+  [case.match]
+  direction = "s2c"
+
+  [case.fault]
+  kind = "malformed_json"
+
+  [case.expect]
+  liveness_probe_within_ms = 15000
+
+# --- schema -----------------------------------------------------------------
+
+[[case]]
+id           = "schema/output-schema-violated"
+applies_to   = ">=2025-06-18"
+subject      = ["server"]
+verdict      = "MUST"
+derives_from = "schema:#/definitions/CallToolResult"
+summary      = "structuredContent violates the outputSchema the server itself declared in tools/list."
+
+  [case.match]
+  method    = "tools/call"
+  direction = "s2c"
+
+  [case.fault]
+  kind   = "schema_violation"
+  target = "declared_output_schema"
+  how    = "wrong_type"
+
+# --- manifest ---------------------------------------------------------------
+
+[[case]]
+id           = "manifest/mutate-silent"
+applies_to   = "*"
+subject      = ["gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "A tool disappears upstream with no list_changed; gateways that poll rather than trust notifications should still converge."
+
+  [case.match]
+  face = "upstream"
+
+  [case.fault]
+  kind   = "manifest_mutate"
+  list   = "tools"
+  op     = "remove"
+  notify = "silent"
+
+  [case.expect]
+  invariants = ["merged-manifest-consistency"]
+
+# --- gateway ----------------------------------------------------------------
+
+[[case]]
+id           = "gateway/upstream-credential-downstream"
+applies_to   = "<2026-07-28"
+subject      = ["gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "An upstream credential or session id appears in a downstream frame."
+
+  [case.match]
+  face = "upstream"
+
+  [case.fault]
+  kind = "hang"
+  scope = "response"
+  withdraw_after_ms = 5000
+
+  [case.expect]
+  invariants = ["no-credential-leak", "session-identity-isolation"]
+
+# --- lifecycle --------------------------------------------------------------
+
+[[case]]
+id           = "lifecycle/capability-narrowed-on-reconnect"
+applies_to   = "*"
+subject      = ["client", "gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "The peer reconnects claiming fewer capabilities than before; a cached capability must not be reused."
+
+  [case.match]
+  face = "upstream"
+
+  [case.fault]
+  kind                = "capability_flip"
+  field               = "capabilities"
+  direction_of_change = "narrow"

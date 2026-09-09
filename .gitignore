@@ -1,0 +1,6 @@
+/charpy
+/dist/
+/charpy-out/
+*.jsonl.gz
+
+.direnv/

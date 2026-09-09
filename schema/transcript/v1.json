@@ -1,0 +1,330 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://charpy.dev/schema/transcript/v1.json",
+  "title": "charpy transcript line, schema_version 1",
+  "description": "One JSON object per line of a charpy JSONL transcript. See docs/design/transcript.md.",
+
+  "type": "object",
+  "required": ["schema_version", "type", "run_id", "seq", "t_mono_ns", "t_wall"],
+
+  "properties": {
+    "schema_version": { "const": 1 },
+    "type": { "enum": ["header", "frame", "event"] },
+    "run_id": { "type": "string", "minLength": 1 },
+    "seq": { "type": "integer", "minimum": 0 },
+    "t_mono_ns": { "type": "integer", "minimum": 0 },
+    "t_wall": { "type": "string", "format": "date-time" }
+  },
+
+  "oneOf": [
+    { "$ref": "#/$defs/header" },
+    { "$ref": "#/$defs/frame" },
+    { "$ref": "#/$defs/event" }
+  ],
+
+  "$defs": {
+    "revision": {
+      "description": "A spec revision label, or draft.",
+      "anyOf": [
+        { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+        { "const": "draft" }
+      ]
+    },
+
+    "client_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Which synthetic client. Always c0 in v0; a fleet in soak mode."
+    },
+
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "charpy's logical session, present in every revision. Distinct from session.mcp_session_id, which is the protocol session and exists only through 2025-11-25."
+    },
+
+    "face": { "enum": ["downstream", "upstream"] },
+    "direction": { "enum": ["c2s", "s2c"] },
+    "transport": { "enum": ["stdio", "http", "inproc"] },
+
+    "link": {
+      "type": "object",
+      "description": "Cross-face join key. See transcript.md section 4.",
+      "required": ["via", "confidence"],
+      "properties": {
+        "charpy_id": {
+          "type": ["string", "null"],
+          "description": "charpy's own join identifier; equal across correlated frames on both faces."
+        },
+        "via": { "enum": ["forwarded", "traced", "inferred", "none"] },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "trace_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{32}$" },
+        "span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" },
+        "parent_span_id": { "type": ["string", "null"], "pattern": "^[0-9a-f]{16}$" }
+      },
+      "allOf": [
+        {
+          "description": "Only forwarded and traced joins may claim full confidence.",
+          "if": { "properties": { "via": { "enum": ["inferred", "none"] } }, "required": ["via"] },
+          "then": { "properties": { "confidence": { "exclusiveMaximum": 1 } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+
+    "fault": {
+      "type": ["object", "null"],
+      "description": "The fault applied to this frame, or null.",
+      "required": ["case_id", "citation", "kind"],
+      "properties": {
+        "case_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*$"
+        },
+        "citation": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*(@([0-9]{4}-[0-9]{2}-[0-9]{2}|draft))?(#seed=[0-9a-f]{6,16})?$"
+        },
+        "kind": { "type": "string", "minLength": 1 },
+        "params": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+
+    "http": {
+      "type": ["object", "null"],
+      "properties": {
+        "status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+        "headers": {
+          "type": "object",
+          "description": "Lowercased header names. Redacted values appear as <redacted:sha256:...>.",
+          "additionalProperties": { "type": "string" }
+        },
+        "sse_event": { "type": ["string", "null"] },
+        "sse_id": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+
+    "session": {
+      "type": ["object", "null"],
+      "description": "Sessioned revisions only. Null on 2026-07-28 and later.",
+      "properties": {
+        "mcp_session_id": { "type": ["string", "null"] },
+        "identity": { "type": ["string", "null"] }
+      },
+      "additionalProperties": false
+    },
+
+    "header": {
+      "properties": {
+        "type": { "const": "header" },
+        "seq": { "const": 0 },
+        "schema_version": true,
+        "run_id": true,
+        "t_mono_ns": true,
+        "t_wall": true,
+
+        "charpy_version": { "type": "string" },
+        "charpy_commit": { "type": "string" },
+        "seed": { "type": "string", "pattern": "^[0-9a-f]{6,16}$" },
+        "mode": { "enum": ["proxy", "hostile-server", "stdio-ingress", "inproc"] },
+        "subject": {
+          "type": "object",
+          "required": ["class"],
+          "properties": {
+            "class": { "enum": ["server", "client", "gateway"] },
+            "descriptor": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "revision": {
+          "type": "object",
+          "required": ["negotiated"],
+          "properties": {
+            "negotiated": { "$ref": "#/$defs/revision" },
+            "offered": { "type": "array", "items": { "$ref": "#/$defs/revision" } },
+            "how": { "enum": ["initialize", "server-discover", "probe", "forced", "unknown"] }
+          },
+          "additionalProperties": false
+        },
+        "policy_digest": { "type": "string" },
+        "cases": { "type": "array", "items": { "type": "string" } },
+        "redaction": { "enum": ["on", "off"] },
+        "clock": { "enum": ["injected", "real"] },
+        "fleet": {
+          "type": "object",
+          "description": "Synthetic client population. v0 always declares 1.",
+          "properties": { "clients": { "type": "integer", "minimum": 1 } },
+          "required": ["clients"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["charpy_version", "seed", "mode", "subject", "redaction", "clock"],
+      "additionalProperties": false
+    },
+
+    "frame": {
+      "properties": {
+        "type": { "const": "frame" },
+        "schema_version": true,
+        "run_id": true,
+        "seq": true,
+        "t_mono_ns": true,
+        "t_wall": true,
+
+        "face": { "$ref": "#/$defs/face" },
+        "direction": { "$ref": "#/$defs/direction" },
+        "transport": { "$ref": "#/$defs/transport" },
+        "client_id": { "$ref": "#/$defs/client_id" },
+        "session_id": { "$ref": "#/$defs/session_id" },
+        "conn_id": { "type": ["string", "null"] },
+        "stream_id": { "type": ["string", "null"] },
+
+        "kind": { "enum": ["request", "response", "error", "notification", "malformed"] },
+        "id": {
+          "type": ["string", "null"],
+          "description": "Canonical JSON text of the JSON-RPC id, always a string. See transcript.md section 5."
+        },
+        "id_type": { "enum": ["number", "string", "null", "absent", "invalid"] },
+        "method": { "type": ["string", "null"] },
+        "result_type": { "enum": ["complete", "input_required", null] },
+        "error_code": { "type": ["integer", "null"] },
+
+        "revision": { "$ref": "#/$defs/revision" },
+        "raw": { "type": "string", "contentEncoding": "base64" },
+        "raw_len": { "type": "integer", "minimum": 0 },
+        "raw_truncated": { "type": "boolean" },
+
+        "http": { "$ref": "#/$defs/http" },
+        "link": { "$ref": "#/$defs/link" },
+        "fault": { "$ref": "#/$defs/fault" },
+        "session": { "$ref": "#/$defs/session" }
+      },
+      "required": [
+        "face", "direction", "transport", "client_id", "session_id",
+        "kind", "id_type", "raw", "raw_len", "raw_truncated", "link"
+      ],
+      "allOf": [
+        {
+          "description": "A malformed frame has no parsed envelope, but keeps its bytes.",
+          "if": { "properties": { "kind": { "const": "malformed" } }, "required": ["kind"] },
+          "then": {
+            "properties": {
+              "id": { "const": null },
+              "id_type": { "const": "absent" },
+              "method": { "const": null },
+              "result_type": { "const": null },
+              "error_code": { "const": null }
+            }
+          }
+        },
+        {
+          "description": "Requests and notifications must name a method.",
+          "if": {
+            "properties": { "kind": { "enum": ["request", "notification"] } },
+            "required": ["kind"]
+          },
+          "then": { "properties": { "method": { "type": "string", "minLength": 1 } } }
+        },
+        {
+          "description": "An error frame carries a JSON-RPC error code.",
+          "if": { "properties": { "kind": { "const": "error" } }, "required": ["kind"] },
+          "then": { "properties": { "error_code": { "type": "integer" } } }
+        },
+        {
+          "description": "http is populated only on the http transport.",
+          "if": {
+            "properties": { "transport": { "enum": ["stdio", "inproc"] } },
+            "required": ["transport"]
+          },
+          "then": { "properties": { "http": { "const": null } } }
+        }
+      ],
+      "additionalProperties": false
+    },
+
+    "event": {
+      "properties": {
+        "type": { "const": "event" },
+        "schema_version": true,
+        "run_id": true,
+        "seq": true,
+        "t_mono_ns": true,
+        "t_wall": true,
+
+        "event_kind": {
+          "enum": [
+            "conn_open", "conn_close",
+            "stream_open", "stream_close",
+            "subject_exit",
+            "fault_scheduled", "fault_applied", "fault_withdrawn",
+            "probe", "clock_advance", "note"
+          ]
+        },
+        "face": { "anyOf": [{ "$ref": "#/$defs/face" }, { "type": "null" }] },
+        "transport": { "anyOf": [{ "$ref": "#/$defs/transport" }, { "type": "null" }] },
+        "client_id": { "anyOf": [{ "$ref": "#/$defs/client_id" }, { "type": "null" }] },
+        "session_id": { "anyOf": [{ "$ref": "#/$defs/session_id" }, { "type": "null" }] },
+        "conn_id": { "type": ["string", "null"] },
+        "stream_id": { "type": ["string", "null"] },
+        "detail": { "type": "object" },
+        "fault": { "$ref": "#/$defs/fault" },
+        "link": { "anyOf": [{ "$ref": "#/$defs/link" }, { "type": "null" }] }
+      },
+      "required": ["event_kind"],
+      "allOf": [
+        {
+          "description": "A stream close must say who closed it; the cancellation invariant depends on it.",
+          "if": { "properties": { "event_kind": { "const": "stream_close" } }, "required": ["event_kind"] },
+          "then": {
+            "properties": {
+              "detail": {
+                "type": "object",
+                "required": ["reason"],
+                "properties": {
+                  "reason": {
+                    "enum": ["peer_close", "charpy_close", "subject_close", "timeout", "error"]
+                  }
+                }
+              }
+            },
+            "required": ["detail"]
+          }
+        },
+        {
+          "description": "Fault lifecycle events must identify their case.",
+          "if": {
+            "properties": {
+              "event_kind": { "enum": ["fault_scheduled", "fault_applied", "fault_withdrawn"] }
+            },
+            "required": ["event_kind"]
+          },
+          "then": {
+            "properties": { "fault": { "type": "object" } },
+            "required": ["fault"]
+          }
+        },
+        {
+          "description": "A probe must record its outcome; liveness is computed from it.",
+          "if": { "properties": { "event_kind": { "const": "probe" } }, "required": ["event_kind"] },
+          "then": {
+            "properties": {
+              "detail": {
+                "type": "object",
+                "required": ["method", "outcome"],
+                "properties": {
+                  "method": { "type": "string" },
+                  "outcome": { "enum": ["ok", "error", "timeout", "refused"] },
+                  "elapsed_mono_ns": { "type": "integer", "minimum": 0 }
+                }
+              }
+            },
+            "required": ["detail"]
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}
