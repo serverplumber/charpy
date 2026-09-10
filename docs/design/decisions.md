@@ -190,7 +190,7 @@ second source of truth. JSON as a format was reconsidered and rejected: it would
 in the one file that doubles as documentation, and it does not solve the two problems it appears to —
 registry single-sourcing is format-independent, and JSON Schema validators report pointer paths, not
 line numbers, so the semantic-error position gap is identical in either format. See
-`policy-format.md` §6.
+`policy-format.md` §6; the position gap itself is scoped in `../open-problems.md`.
 
 ---
 

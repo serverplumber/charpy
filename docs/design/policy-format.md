@@ -205,15 +205,30 @@ Four layers, all at load, none at run:
 
 ```
 $ charpy policy validate cases/
-cases/stream.toml:24:3: unknown key "cut_after" in [case.fault]
-  fault kind "truncate" accepts: cut_at, after_bytes, then
-cases/gateway.toml:11:1: case "gateway/header-rederived" declares verdict = "MUST"
+cases/stream.toml:24:3: strict mode: unknown key "sumary"
+cases/stream.toml: case "stream/truncate-mid-event": unknown key "cut_after" in [case.fault];
+  kind "truncate" accepts: cut_at, after_bytes, then
+cases/gateway.toml: case "gateway/header-rederived": verdict = "MUST"
   but derives_from = "spec:..."; MUST requires a schema: source (see oracle.md §2)
-2 errors, 0 warnings
+3 errors, 0 warnings
 ```
 
-Errors carry file, line and column — this is why `pelletier/go-toml/v2` was chosen over
-`BurntSushi/toml` — and name the accepted alternatives. A control plane whose error messages require
+What an error can locate depends on the layer that caught it, and the promise is honest about the
+difference:
+
+- **Decode errors carry file, line and column** — this is why `pelletier/go-toml/v2` was chosen
+  over `BurntSushi/toml`.
+- **Registry and semantic errors carry file and case ID, and name the accepted alternatives.**
+  They run after strict decode, over plain Go values, where position information no longer exists.
+  A case ID plus the offending key finds the line in one editor search, and the accepted-
+  alternatives list is what actually fixes the mistake.
+
+Extending positions to the later layers is a known gap, deliberately not closed for v0 — the cost
+and the paths are recorded in [`../open-problems.md`](../open-problems.md). Taplo covers the
+interactive case meanwhile (§6): the generated schema flags an unknown key or out-of-range value at
+its exact position while the file is being written, which is earlier than any loader message.
+
+Either way, an error names the accepted alternatives. A control plane whose error messages require
 reading the source is a control plane people work around.
 
 ---

@@ -49,6 +49,7 @@ type Case struct {
 	// Resolved during loading.
 	parsedID    ID             `toml:"-"`
 	parsedRange revision.Range `toml:"-"`
+	srcFile     string         `toml:"-"`
 }
 
 // ParsedID returns the case's parsed permanent identifier.
@@ -121,13 +122,18 @@ func Load(fsys fs.FS, dir string) (*Catalogue, []string, error) {
 		dec := toml.NewDecoder(strings.NewReader(string(raw)))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&m); err != nil {
-			return nil, nil, fmt.Errorf("%s: %w", name, err)
+			// Accumulate rather than abort: `charpy policy validate` should
+			// report every broken file in one run, not one per run.
+			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+			continue
 		}
 		if m.SchemaVersion != 1 {
-			return nil, nil, fmt.Errorf("%s: schema_version = %d, want 1", name, m.SchemaVersion)
+			errs = append(errs, fmt.Sprintf("%s: schema_version = %d, want 1", name, m.SchemaVersion))
+			continue
 		}
 
 		for _, cs := range m.Cases {
+			cs.srcFile = name
 			e, w := validate(&cs, name)
 			errs = append(errs, e...)
 			warnings = append(warnings, w...)
@@ -136,7 +142,7 @@ func Load(fsys fs.FS, dir string) (*Catalogue, []string, error) {
 			}
 			if prev, dup := cat.byID[cs.ID]; dup {
 				errs = append(errs, fmt.Sprintf(
-					"%s: duplicate case id %q (also in %s)", name, cs.ID, cat.Cases[prev].Summary))
+					"%s: duplicate case id %q (also in %s)", name, cs.ID, cat.Cases[prev].srcFile))
 				continue
 			}
 			cat.byID[cs.ID] = len(cat.Cases)

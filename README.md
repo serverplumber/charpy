@@ -133,6 +133,7 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 | [`policy-format.md`](docs/design/policy-format.md) | The TOML case and policy format |
 | [`decisions.md`](docs/design/decisions.md) | ADRs for every settled open question |
 | [`soak.md`](docs/design/soak.md) | Soak mode: synthetic client fleet and leak detection (v1 sketch) |
+| [`open-problems.md`](docs/open-problems.md) | Known gaps, deliberately open, scoped rather than papered over |
 
 ## Development
 

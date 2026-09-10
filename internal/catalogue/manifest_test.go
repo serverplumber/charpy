@@ -203,6 +203,34 @@ kind = "hang"`,
 	}
 }
 
+// A validate run should report every broken file at once, so decode errors
+// accumulate per file rather than aborting on the first.
+func TestLoadAccumulatesAcrossFiles(t *testing.T) {
+	fsys := fstest.MapFS{
+		"cases/a.toml": &fstest.MapFile{Data: []byte("schema_version = 1\nbogus_key = true\n")},
+		"cases/b.toml": &fstest.MapFile{Data: []byte(`schema_version = 1
+[[case]]
+id = "id/thing"
+applies_to = "*"
+subject = ["server"]
+verdict = "OBSERVED"
+derives_from = "bogus"
+summary = "s"
+[case.fault]
+kind = "hang"
+`)},
+	}
+	_, _, err := Load(fsys, "cases")
+	if err == nil {
+		t.Fatal("loaded successfully; want errors from both files")
+	}
+	for _, want := range []string{"cases/a.toml", "cases/b.toml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %s:\n%v", want, err)
+		}
+	}
+}
+
 func TestDuplicateIDsAreRejected(t *testing.T) {
 	const c = `[[case]]
 id = "id/thing"
@@ -223,6 +251,10 @@ kind = "hang"
 	_, _, err := Load(fsys, "cases")
 	if err == nil || !strings.Contains(err.Error(), "duplicate case id") {
 		t.Fatalf("want duplicate id error, got %v", err)
+	}
+	// "(also in %s)" must name the file the first definition lives in.
+	if !strings.Contains(err.Error(), "also in cases/a.toml") {
+		t.Errorf("duplicate id error does not name the first file:\n%v", err)
 	}
 }
 
