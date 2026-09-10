@@ -40,7 +40,7 @@ var registry = []Invariant{
 		Summary: "No result is delivered for a request after its cancellation was acknowledged. On 2026-07-28 HTTP the cancellation signal is the stream close itself."},
 
 	{Name: "no-credential-leak", RequiresCorrelation: true,
-		Summary: "No upstream credential, Authorization header, session identifier, or internal address appears in any downstream frame."},
+		Summary: "No upstream credential, Authorization header, session identifier, or internal address appears verbatim in any downstream frame. Verbatim only: comparison is by redaction digest of the exact bytes, so a re-encoded secret is not caught. See docs/open-problems.md."},
 	{Name: "session-identity-isolation", RequiresCorrelation: true,
 		Summary: "A session established under identity A never observes a frame or stream belonging to identity B. Sessioned revisions only."},
 	{Name: "merged-manifest-consistency", RequiresCorrelation: true,

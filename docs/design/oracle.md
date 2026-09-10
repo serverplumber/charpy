@@ -134,12 +134,20 @@ Require a correlated two-face transcript. **Skipped, never failed, when `join.vi
 
 | | Invariant | Statement |
 |---|---|---|
-| **I5** | `no-credential-leak` | No upstream credential, `Authorization` header, session identifier, or internal address appears in any downstream frame. |
+| **I5** | `no-credential-leak` | No upstream credential, `Authorization` header, session identifier, or internal address appears **verbatim** in any downstream frame. |
 | **I6** | `session-identity-isolation` | A session established under identity A never observes a frame or stream belonging to identity B. |
 | **I7** | `merged-manifest-consistency` | Across a `list_changed` fan-out there is no window in which a tool name resolves to the wrong upstream. |
 
 I5 works on redacted transcripts because redaction is a stable digest, not erasure: the invariant
 proves the *same* secret appeared on both faces without the transcript itself becoming a secret.
+
+**Verbatim is a limitation, and the reporting must carry it.** The digest is of the exact bytes,
+so I5 catches a credential forwarded unchanged and misses one the gateway re-encoded — base64-
+wrapped, re-signed into a new JWT, or embedded inside a larger header value. A pass is therefore
+reported as *"no verbatim credential propagation observed"*, never as *"no credential leak"*: the
+stronger claim was not tested, and a pass must not be citable as proof of it. The gap and the
+tractable narrowing (charpy plants the upstream credentials, so it can precompute digests of known
+transformations) are scoped in `../open-problems.md`.
 
 I6 partitions on `session.identity`, charpy's label for the credential it presented. It exists only
 where a protocol-level session does — `<= 2025-11-25`. SEP-2567 removed `Mcp-Session-Id`, so on

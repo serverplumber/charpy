@@ -36,3 +36,35 @@ structural mistakes at their exact position while the file is being written
 wired — in CI logs, or via `POST /control/policy`, where Taplo isn't standing in front of the
 loader — and lose time locating the key. Or `go-toml` stabilising a positioned-decode API, which
 would collapse the cost side.
+
+---
+
+## `no-credential-leak` (I5) is verbatim-only
+
+**Gap.** I5 compares redaction digests, and a digest is of the exact bytes of a whole matched
+value. It catches a credential the gateway forwarded unchanged. It misses one the gateway
+re-encoded — base64-wrapped, re-signed into a new JWT, hex-dumped into a log field — and one
+embedded inside a larger value, because the containing value digests differently. A gateway can
+leak every secret it holds and pass I5, provided it never leaks one byte-for-byte.
+
+**Why it exists.** Digest equality is the only comparison the oracle can make without holding the
+secret, and the transcript must not become a secret (`design/transcript.md` §5). Recognising an
+*arbitrary* transformation of a secret from the middle would require inverting the transformation,
+which is not computable in general.
+
+**Why it is not closed for v0.** The general case never closes. The tractable narrowing rests on
+an asymmetry charpy already has: in a gateway run charpy *plays the upstream*, so it planted the
+upstream credentials and knows their plaintext. It can therefore precompute digests of known
+transformations — base64, base64url, hex, the value behind a `Bearer ` prefix, JSON-string-escaped
+— and match downstream values against that set. Each added transformation is one more digest to
+compare, not a redesign. Not built for v0 because the transformation list is speculation until a
+real gateway shows which re-encodings actually occur, and a list built on speculation invites
+false confidence one layer deeper.
+
+**Reporting rule, in force now.** A pass is worded *"no verbatim credential propagation
+observed"*, never *"no credential leak"* (`design/oracle.md` §4). The limitation being open is
+acceptable; a pass being citable as proof of the untested stronger property is not.
+
+**Trigger to revisit.** The first observed gateway that re-encodes credentials across the seam —
+at which point the known-plaintext probe above is an afternoon, with the transformation list
+grounded in evidence.

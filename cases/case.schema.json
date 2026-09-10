@@ -52,7 +52,7 @@
                     },
                     {
                       "const": "no-credential-leak",
-                      "description": "No upstream credential, Authorization header, session identifier, or internal address appears in any downstream frame."
+                      "description": "No upstream credential, Authorization header, session identifier, or internal address appears verbatim in any downstream frame. Verbatim only: comparison is by redaction digest of the exact bytes, so a re-encoded secret is not caught. See docs/open-problems.md."
                     },
                     {
                       "const": "session-identity-isolation",

@@ -263,9 +263,11 @@ Present when `transport = "http"`, otherwise null.
 
 Header names are lowercased. Values matching the redaction policy are replaced with
 `"<redacted:sha256:ab12…>"` — a stable digest, so the credential-leak invariant can still prove that
-the *same* secret appeared on both faces without the transcript itself becoming a secret. Redaction
-is on by default; `--no-redact` exists for local debugging and stamps `redaction: "off"` into the
-header line so a report generated from it is visibly unsafe to share.
+the *same* secret appeared on both faces without the transcript itself becoming a secret. The digest
+is of the exact value, whole: equality across faces — and therefore I5 — is **verbatim-only**, and a
+re-encoded or embedded secret produces a different digest (`oracle.md` §4, `../open-problems.md`).
+Redaction is on by default; `--no-redact` exists for local debugging and stamps `redaction: "off"`
+into the header line so a report generated from it is visibly unsafe to share.
 
 ### `session`
 
