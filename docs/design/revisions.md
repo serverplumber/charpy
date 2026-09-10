@@ -48,6 +48,13 @@ let a verdict change without a commit, which is the one thing a citable suite mu
 A test asserts every listed revision embeds, parses, and compiles as a JSON Schema. It is cheap and
 it catches a truncated vendor pull immediately.
 
+**The specification prose is vendored too**, into `spec/<revision>/**.mdx` (`just vendor-specs`),
+from the same pinned commit as the schemas so the two can never disagree about which revision they
+describe. The design docs quote normative clauses and `derives_from` cites `spec:` paths; a
+citation that resolves only against a moving external website is a citation that rots. Every clause
+these documents rely on is checkable in-repo, offline — `spec/VENDORED.md` records the provenance
+and the list of claims re-verified at each pull.
+
 ---
 
 ## 3. Fingerprinting
@@ -111,7 +118,7 @@ loader and the oracle both consult.
 | `ping` | present | **removed** |
 | Log level | `logging/setLevel` | `io.modelcontextprotocol/logLevel` per request |
 | Results | untyped | `resultType` required: `complete` \| `input_required` |
-| List results | plain | `CacheableResult`: `ttlMs`, `cacheScope` required |
+| List and read results | plain | `CacheableResult`: `ttlMs`, `cacheScope` required |
 | Mirrored headers | none | `Mcp-Method`, `Mcp-Name`, `Mcp-Param-*` REQUIRED |
 | Roots / Sampling / Logging | active | deprecated (SEP-2577) |
 

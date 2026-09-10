@@ -9,7 +9,11 @@ set shell := ["bash", "-eo", "pipefail", "-c"]
 go  := env("GO", "go")
 pkg := "./..."
 
-schema_base := "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/main/schema"
+# The upstream commit both vendor recipes pull from. Bump it, run vendor-specs
+# and vendor-schemas together, update both VENDORED.md files.
+mcp_commit  := "aa8ce049f089f92618340190d4ece141f663310d"
+mcp_repo    := "https://github.com/modelcontextprotocol/modelcontextprotocol"
+schema_base := "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/" + mcp_commit + "/schema"
 revisions   := "2024-11-05 2025-03-26 2025-06-18 2025-11-25 2026-07-28 draft"
 
 version := `git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev`
@@ -82,6 +86,24 @@ vendor-schemas:
     echo
     echo "Now update schema/VENDORED.md with the new commit SHA and sizes,"
     echo "then run 'just test' -- the failures are the changelog."
+
+# Refresh the vendored MCP spec prose (manual by design; see spec/VENDORED.md)
+vendor-specs:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+    echo "fetching {{mcp_commit}}"
+    curl -fsSL --max-time 300 "{{mcp_repo}}/archive/{{mcp_commit}}.tar.gz" -o "$tmp/mcp.tar.gz"
+    tar xzf "$tmp/mcp.tar.gz" -C "$tmp"
+    src="$tmp/modelcontextprotocol-{{mcp_commit}}/docs/specification"
+    for r in {{revisions}}; do
+      rm -rf "spec/$r"
+      (cd "$src" && find "$r" -name '*.mdx' \
+        -exec install -D {} "{{justfile_directory()}}/spec/{}" \;)
+    done
+    echo
+    echo "Now update spec/VENDORED.md (commit, date, file count) and re-check"
+    echo "the claims it records -- line numbers move at every pull."
 
 clean:
     rm -rf charpy dist charpy-out

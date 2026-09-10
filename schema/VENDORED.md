@@ -21,6 +21,9 @@ air-gapped CI, and in five years when a URL has moved. A verdict must never chan
 - Commit: `aa8ce049f089f92618340190d4ece141f663310d`
 - Pulled: 2026-09-08
 
+The specification prose is vendored separately, from the same commit, under `spec/` — see
+`spec/VENDORED.md`. Refresh both together by bumping `mcp_commit` in the justfile.
+
 `schema.ts` is upstream's source of truth and `schema.json` is generated from it. charpy vendors the
 generated JSON because that is the artifact a validator can consume, and because a generated
 normative artifact rejecting a frame is what earns a `MUST` verdict (`docs/design/oracle.md` §3).

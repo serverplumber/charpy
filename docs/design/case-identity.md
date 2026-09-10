@@ -173,6 +173,10 @@ The durable citation — where the expectation comes from. One of:
 | `schema:` | `schema:#/definitions/CallToolResult` |
 | `none` | Behaviour with no normative source; only legal when `verdict = "OBSERVED"` |
 
+A `spec:` path resolves against the vendored prose: `spec:R/path#anchor` is
+`spec/R/path*.mdx` in this repository, at the commit `spec/VENDORED.md` records — the citation
+stays checkable offline and after upstream reorganises its site.
+
 `derives_from = "none"` is deliberately available and deliberately ugly. A case with no normative
 source is legitimate — goroutine leaks have no clause — but it should be visible in review that the
 case is asserting a judgement rather than citing an artifact.
