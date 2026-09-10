@@ -15,6 +15,7 @@ decision to be revisited.
 | ADR-007 | Case identity: stable slug, revision at citation | Case identity |
 | ADR-008 | Truncation variants are case parameters, not separate faults | Fault taxonomy |
 | ADR-009 | Registries live with the code they describe | Package boundaries |
+| ADR-010 | One reference peer and an interposer; no feral peer | Architecture |
 
 ---
 
@@ -85,7 +86,7 @@ honest. That would be a per-driver capability, never a default.
 **Decision.** `internal/driver/inproc` for v0.
 
 **Why.** Exposing it creates an API surface that must be maintained across every refactor of the
-engine, in exchange for a benefit charpy cannot yet size — nobody has asked for it. Promotion later
+interposer, in exchange for a benefit charpy cannot yet size — nobody has asked for it. Promotion later
 is a one-line move; demotion after someone depends on it is a breaking change and an apology. The
 asymmetry is the whole argument.
 
@@ -234,7 +235,7 @@ parameters, matcher keys and scopes, and invariant names. Where do those tables 
 | Registry | Package | Why there |
 |---|---|---|
 | Mechanisms, parameters, values | `internal/fault` | The mechanism implementations are there |
-| Match keys and scopes | `internal/engine` | The engine evaluates `[case.match]` |
+| Match keys and scopes | `internal/interpose` | The interposer evaluates `[case.match]` |
 | Invariant names | `internal/oracle/invariant` | The invariant implementations are there |
 
 The catalogue imports all three and validates manifests against them. `[case.expect]`'s key list
@@ -252,10 +253,10 @@ documentation for free. The indirection costs a few files and some structs. v0 h
 correctness of the catalogue is worth more than compactness.
 
 **Dependency direction, fixed here.** The catalogue is the outer layer: it parses manifests and
-compiles them into the domain packages' terms. `fault`, `engine` and `invariant` never import the
-catalogue — the engine consumes compiled policy as its own types and knows nothing about TOML. This
-is what keeps the future engine ⇄ catalogue import cycle structurally impossible rather than merely
-avoided.
+compiles them into the domain packages' terms. `fault`, `interpose` and `invariant` never import
+the catalogue — the interposer consumes compiled policy as its own types and knows nothing about
+TOML. This is what keeps the future interposer ⇄ catalogue import cycle structurally impossible
+rather than merely avoided.
 
 **Incidental fix.** Moving the mechanism registry surfaced a collision: `malformed_json`'s parameter
 was named `kind`, which the `[case.fault]` table already uses to select the mechanism, so the
@@ -264,3 +265,56 @@ parameter could never be set. Renamed to `how`; a registry test now rejects any 
 
 **Revisit if.** A registry needs to describe something with no owning package — that would be a
 sign the package layout, not the registry placement, is wrong.
+
+---
+
+## ADR-010 — One reference peer and an interposer; no feral peer
+
+**Question.** The pre-design brief decided "two peers, one message model": a reference-correct
+peer on the official SDK and a feral peer on raw wire, because "the SDK cannot be the hostile
+side." Is the hostile side really a second peer?
+
+**Decision.** No. There is one reference peer — the official SDK, era selected at construction,
+never coerced into misbehaving — and one **interposer** that owns the wire and applies faults
+with three verbs: rewrite, withhold, synthesize. The reference peer plugs into the interposer as
+its `Transport`; charpy man-in-the-middles its own SDK. What remains of the feral layer is not a
+peer: the raw wire framing (`internal/wire`) and `json.RawMessage` frame templates for the
+synthesize verb. `internal/engine` is renamed `internal/interpose` — "engine" described a bag of
+behaviour; "interposer" names the position that behaviour occupies. Full design in
+`interposer.md`.
+
+**Why.** The brief's premise is true — a correct SDK will not emit a duplicate id or a truncated
+frame — but the conclusion doesn't follow, because hostility doesn't have to live in the peer.
+With the corruptor positioned as the SDK's transport, the SDK emits correct frames and the wire
+carries corrupted ones; no coercion anywhere. Walking the v0 catalogue: every mechanism reduces
+to the three verbs plus legitimate SDK reconfiguration (`manifest_mutate` is a real manifest
+change with the notification optionally swallowed; `capability_flip` is a reconfigured peer at a
+reconnect boundary). The apparent exception, era-lying, decomposes instead of requiring a
+translator: a *lie* is a one-frame rewrite whose incoherence is the fault, coherent *speech* in
+another era is SDK configuration, and the hybrids are splices (`interposer.md` §4).
+
+Two consequences fall out and both were already wanted:
+
+- **The double-entry ledger stops being optional.** Self-MITM forces intent-versus-wire
+  bookkeeping — the interposer must un-rewrite the subject's responses or wedge its own SDK —
+  and that same ledger is what the fault-poisoning cases and cross-face correlation needed
+  anyway. One structure, three consumers.
+- **The `dev.charpy/` argument marker is deleted.** The `inferred` correlation regime needed it
+  only while correlation was imagined as a post-hoc guess over found traffic. The scenario
+  player originates the traffic, so seeded distinctness inside schema-legitimate argument values
+  gives the ledger a content join with zero perturbation of the subject (`interposer.md` §6,
+  `transcript.md` §4).
+
+**Cost.** The interposer must be scriptable around its own faults — the reference peer responds
+in its real configuration to a subject that believed a lie, and the ledger has to tag those
+frames as consequences, not subject behaviour. That attribution logic is new. It is also exactly
+the "honest ledger of a falsified conversation" problem in its simplest form, so the cost is
+front-loaded design, not accident-prone sprawl.
+
+**Supersedes.** The "two peers, one message model" and "two drivers, one fault engine" framings.
+`envelope` remains the shared message model — now shared by the reference peer, the interposer
+and the templates rather than by two peers.
+
+**Revisit if.** A case genuinely requires charpy to *coherently* speak one era over a connection
+whose configuration is another — sustained live translation. None is known, and §4 of
+`interposer.md` is the argument none should exist.

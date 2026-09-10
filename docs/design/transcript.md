@@ -142,7 +142,7 @@ Three regimes. `link.via` records which one produced this frame's key.
 |---|---|---|
 | `forwarded` | Proxy and stdio-ingress modes. charpy relays the bytes, so it stamps its own id on both copies. | Authoritative, `confidence = 1.0` |
 | `traced` | Gateway under test. Join on `traceparent` in `_meta` per SEP-414, which the spec blesses on both transports. | Authoritative when the subject propagates, `confidence = 1.0` |
-| `inferred` | Subject drops trace context. Heuristic join on method, arguments, ordering and timing. | `confidence < 1.0` |
+| `inferred` | Subject drops trace context. Ledger content join: charpy originated the frame, so the interposer's ledger holds its argument digest; the other face's content is matched against it, with ordering and timing as tie-breakers (`interposer.md` §6). | `confidence < 1.0` |
 | `none` | No join attempted or possible. | `confidence = 0.0` |
 
 ### The credibility rule
@@ -179,9 +179,14 @@ charpy stamps `traceparent`, and propagates `tracestate` and `baggage`, into `_m
 it originates, on both transports. On HTTP it additionally sets the `traceparent` header. Per SEP-414
 these three keys are an explicit exception to the reverse-DNS prefix rule and need no namespace.
 
-Where charpy needs a marker of its own — the `inferred` regime plants one in tool arguments — it uses
-the `dev.charpy/` prefix. Any prefix whose second label is `modelcontextprotocol` or `mcp` is
-reserved by the spec; `charpy` is neither, so `dev.charpy/` is permitted.
+The `inferred` regime plants **no marker in the traffic**. An earlier draft had charpy add a
+`dev.charpy/` key inside tool arguments so a forwarded copy could be recognised; that is deleted,
+because it perturbs the subject — a gateway validating arguments against an `inputSchema` with
+`additionalProperties: false` rejects the call *because charpy was watching*. Distinctness comes
+instead from the scenario player, which controls every argument byte it originates and makes each
+call unique inside values the tool legitimately accepts (`interposer.md` §6). Where charpy does
+need a `_meta` key of its own it uses the `dev.charpy/` prefix, which is permitted: the reserved
+prefixes are those whose second label is `modelcontextprotocol` or `mcp`, and `charpy` is neither.
 
 ---
 
@@ -315,7 +320,7 @@ Null on frames charpy did not tamper with.
 | `conn_open` / `conn_close` | Transport connection established or torn down | Liveness, leak detection |
 | `stream_open` / `stream_close` | SSE stream or stdio pipe opened or closed | **Cancellation on 2026-07-28 HTTP**, truncation cases |
 | `subject_exit` | stdio subject process exited | Exit-code reporting, harness-vs-subject attribution |
-| `fault_scheduled` | Engine selected a frame or moment for a fault | Case audit |
+| `fault_scheduled` | Interposer selected a frame or moment for a fault | Case audit |
 | `fault_applied` | Fault took effect | Correlating a fault to its consequences |
 | `fault_withdrawn` | Hang released, list restored, peer recovered | **Liveness clock starts here** |
 | `probe` | Liveness probe sent and its outcome | Liveness verdict |

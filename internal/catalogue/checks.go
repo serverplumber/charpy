@@ -5,13 +5,13 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/serverplumber/charpy/internal/engine"
 	"github.com/serverplumber/charpy/internal/fault"
+	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
 )
 
 // The registries validated against here live with the code they describe:
-// mechanisms in internal/fault, match keys and scopes in internal/engine,
+// mechanisms in internal/fault, match keys and scopes in internal/interpose,
 // invariants in internal/oracle/invariant. The catalogue is the outer layer —
 // it imports all three and compiles manifests into their terms; none of them
 // import the catalogue. See docs/design/decisions.md ADR-009.
@@ -101,15 +101,15 @@ func checkFault(table map[string]any) []string {
 	return errs
 }
 
-// checkMatch validates a [case.match] table against the engine's matcher-key
-// registry.
+// checkMatch validates a [case.match] table against the interposer's
+// matcher-key registry.
 func checkMatch(table map[string]any) []string {
 	var errs []string
 	for k, v := range table {
-		mk, known := engine.LookupMatchKey(k)
+		mk, known := interpose.LookupMatchKey(k)
 		if !known {
 			errs = append(errs, fmt.Sprintf("unknown key %q in [case.match]; accepts: %s",
-				k, strings.Join(engine.MatchKeyNames(), ", ")))
+				k, strings.Join(interpose.MatchKeyNames(), ", ")))
 			continue
 		}
 		if mk.Values == nil {

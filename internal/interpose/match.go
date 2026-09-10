@@ -1,19 +1,19 @@
-package engine
+package interpose
 
 import "slices"
 
-// The matcher-key registry lives here, next to the matching code, rather than
-// in the catalogue: the engine is what evaluates [case.match], so the engine
-// says what a match table may contain. The catalogue validates manifests
-// against this registry and the case-manifest JSON Schema is generated from
-// it. See docs/design/decisions.md ADR-009.
+// The matcher-key registry lives here, next to the matching code, rather
+// than in the catalogue: the interposer is what evaluates [case.match], so
+// the interposer says what a match table may contain. The catalogue
+// validates manifests against this registry and the case-manifest JSON
+// Schema is generated from it. See docs/design/decisions.md ADR-009.
 //
-// Dependency direction: the catalogue imports the engine, never the reverse.
-// The engine consumes compiled policy in its own terms and knows nothing
-// about TOML.
+// Dependency direction: the catalogue imports the interposer, never the
+// reverse. The interposer consumes compiled policy in its own terms and
+// knows nothing about TOML.
 
 // Scope names the population an occurrence counts within. In v0 there is one
-// client and one session, so every scope collapses to run — but the engine
+// client and one session, so every scope collapses to run — but the ledger
 // keys its counters by (scope, dimension value) from the start, because soak
 // mode needs rates over populations and a matcher that has only ever counted
 // globally cannot grow one. See docs/design/policy-format.md.

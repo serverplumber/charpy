@@ -30,7 +30,7 @@ const (
 
 // Case is one entry of the catalogue. Only the identity-bearing fields are
 // decoded strictly here; Match, Fault and Expect are held as raw maps until
-// the engine lands and can typecheck them against a real mechanism.
+// the interposer lands and can compile them against a real mechanism.
 type Case struct {
 	ID              string    `toml:"id"`
 	AppliesTo       string    `toml:"applies_to"`

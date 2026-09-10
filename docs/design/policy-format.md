@@ -91,7 +91,8 @@ session, so every scope collapses to `run` and the field changes nothing.
 It is here because of what comes next. A soak policy needs to express *"30% of clients reconnect
 every 2s without closing"* — a **rate over a population**, not an ordinal over a stream. Those are
 different selector kinds, and a matcher that has only ever counted globally cannot grow one: the
-engine's counters have to be keyed by `(scope, dimension value)` rather than being a single integer.
+interposer's counters have to be keyed by `(scope, dimension value)` rather than being a single
+integer.
 That is a data-structure decision, not a feature, and it is cheap now and invasive later.
 
 So v0 keys its counters that way, with a single key. The v1 addition is then a new selector kind
@@ -185,7 +186,7 @@ Four layers, all at load, none at run:
    line. This is the single most valuable property of the format: a matcher that silently matches
    nothing is a test that silently passes.
 2. **Registry checks.** The tables validated against live with the code they describe — mechanisms
-   and their parameters in `internal/fault`, match keys and scopes in `internal/engine`, invariant
+   and their parameters in `internal/fault`, match keys and scopes in `internal/interpose`, invariant
    names in `internal/oracle/invariant` — and the loader consumes them, so validation cannot drift
    from implementation (`decisions.md` ADR-009). Covers:
    - `fault.kind` names a real mechanism, its parameters exist, enumerated values are in range, and

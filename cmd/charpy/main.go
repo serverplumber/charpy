@@ -55,7 +55,7 @@ func run(args []string) int {
 	}
 }
 
-// notImplemented keeps the command surface honest while the engine is built:
+// notImplemented keeps the command surface honest while the interposer is built:
 // the commands parse and exit 2, rather than existing only in documentation.
 func notImplemented(cmd string, args []string) int {
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)

@@ -51,7 +51,7 @@ captured today, that promise is only worth something if the dimensions were ther
 
 Soak policies need **rates over populations** — "30% of clients reconnect every 2s without closing" —
 not ordinals over a stream. That is a different selector kind, and it lands as a sibling
-`[case.select]` table rather than a rework, because the engine's counters are already keyed by
+`[case.select]` table rather than a rework, because the interposer's counters are already keyed by
 `(scope, dimension)` rather than being a single integer.
 
 ### The clock as a run property

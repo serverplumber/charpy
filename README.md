@@ -20,8 +20,8 @@ Named for the [Charpy impact test](https://en.wikipedia.org/wiki/Charpy_impact_t
 it measures toughness under sudden load, not conformance to dimensions.
 
 > **Status: pre-alpha.** The design is settled and documented in
-> [`docs/design/`](docs/design/). The engine is not built yet. Commands parse
-> and exit 2.
+> [`docs/design/`](docs/design/). The interposer is not built yet. Commands
+> parse and exit 2.
 
 **v0 finds bugs. v1 finds leaks.** v0 drives one client through a catalogue of hostile
 frames and asks whether the subject handles each correctly. v1 adds [soak
@@ -128,6 +128,7 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 | [`case-identity.md`](docs/design/case-identity.md) | How cases are named and cited across five spec revisions |
 | [`transcript.md`](docs/design/transcript.md) | The JSONL schema, face tagging, and the three correlation regimes |
 | [`faults-and-cases.md`](docs/design/faults-and-cases.md) | Mechanisms, parameters, and the stateless-era gateway family |
+| [`interposer.md`](docs/design/interposer.md) | The state machine between origination and the wire: three verbs, the ledger, two clocks |
 | [`oracle.md`](docs/design/oracle.md) | Four layers, thirteen invariants, and why the oracle is offline |
 | [`revisions.md`](docs/design/revisions.md) | The revision matrix, schema vendoring, and the fingerprint ladder |
 | [`policy-format.md`](docs/design/policy-format.md) | The TOML case and policy format |

@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/serverplumber/charpy/internal/engine"
 	"github.com/serverplumber/charpy/internal/fault"
+	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
 	"github.com/serverplumber/charpy/internal/revision"
 )
@@ -117,7 +117,7 @@ func caseSchema() map[string]any {
 
 func matchSchema() map[string]any {
 	props := map[string]any{}
-	for _, k := range engine.MatchKeys() {
+	for _, k := range interpose.MatchKeys() {
 		props[k.Name] = keySchema(k.Summary, k.Type, k.Values)
 	}
 	return map[string]any{

@@ -38,16 +38,17 @@ Two buckets, nothing between.
 | `MUST` | Schema-mechanical only (§3) | A generated normative artifact rejected this frame. charpy asserts nothing. |
 | `OBSERVED` | Everything else | This is what happened. Divergence table attached where one exists. |
 
-Plus two non-verdicts that must not be confused with passing:
+Plus three non-verdicts that must not be confused with passing:
 
 | | Meaning |
 |---|---|
 | `SKIPPED` | The case does not apply — wrong revision, wrong subject class, or degraded correlation. Carries a reason. |
 | `INCONCLUSIVE` | The case applied but the transcript cannot support a conclusion: truncated capture, subject died first, join confidence too low. |
+| `UNTRIGGERED` | The case applied and the run completed, but no frame ever matched, so the fault was never injected. The normal outcome for a relayed-stimulus run (`interposer.md` §5.1) whose traffic never went where the matcher points; under owned stimulus it usually indicates a scenario bug. |
 
 A suite that reports skips as passes acquires false confidence, which is the failure mode that makes
-test suites worthless over time. The report renders all four distinctly and the JUnit output maps
-`SKIPPED` to `<skipped/>` and `INCONCLUSIVE` to `<skipped/>` with a distinguishing message —
+test suites worthless over time. The report renders all five distinctly and the JUnit output maps
+`SKIPPED`, `INCONCLUSIVE` and `UNTRIGGERED` to `<skipped/>` with distinguishing messages —
 never to a pass.
 
 **Never issue a behavioural MUST.** "You violate the spec" from a third party is an opinion requiring

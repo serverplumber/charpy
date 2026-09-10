@@ -68,3 +68,39 @@ acceptable; a pass being citable as proof of the untested stronger property is n
 **Trigger to revisit.** The first observed gateway that re-encodes credentials across the seam —
 at which point the known-plaintext probe above is an afternoon, with the transformation list
 grounded in evidence.
+
+---
+
+## Production interposition (chaos mode)
+
+**Gap.** Chaos engineering *is* interposition with a fault policy, so people will point charpy at
+production traffic whether or not the docs bless it. The relay source makes it mechanically
+trivial (`design/interposer.md` §5.1), and performance is not the barrier — the pass-through path
+is asynchronous and non-blocking by design. What is missing is everything that makes an
+in-request-path instrument survivable in production.
+
+**Why it is not closed for v0.** A test instrument in the request path is an availability
+liability, and closing that is real engineering with its own design space:
+
+- **Fail-open.** A charpy crash or stall must not take the path down. That means a bypass that
+  outlives the process — socket handoff, a supervising shim, or an LB health-check contract —
+  none of which a test instrument needs.
+- **Blast radius and abort.** Chaos tooling convention is an explicit scope ("1% of sessions,
+  these fault kinds, this window") and a kill switch honoured in bounded time.
+  `POST /control/withdraw` is the seed of the kill switch; rate-and-population selection is the
+  seed of scoping — and both seeds are the *soak-mode* machinery: `[case.select]` population
+  rates, `clock = "real"`, and the sampling transcript writer (`design/soak.md` §§3–6).
+- **Control-plane hardening.** Localhost-only binding is the correct v0 default and an
+  inadequate production posture; an endpoint that injects faults into production traffic needs
+  authentication, audit, and a story better than "don't expose it".
+- **TLS.** Interposing real HTTPS means terminating TLS with the certificate-trust burden that
+  implies.
+
+**The honest framing.** Production chaos mode is not a new subsystem; it is soak mode's machinery
+plus the relay source plus fail-open hardening. Building it before soak mode exists would mean
+building soak mode's hardest parts out of order, without the leak-detection payoff. The brief's
+"not a proxy for production use" stands for v0 as a statement about guarantees, not about demand.
+
+**Trigger to revisit.** Soak mode (v1) shipping — at that point the marginal cost is the
+fail-open and control-plane work alone — or a credible external user asking for it, which would
+tell us which guarantees they actually need rather than which ones we imagine.

@@ -6,7 +6,7 @@
 // server. For gateway runs the HTML's one essential affordance is clicking an
 // id and seeing both faces side by side.
 //
-// SKIPPED and INCONCLUSIVE are rendered distinctly from passes. A suite that
-// reports skips as passes acquires false confidence, which is how test suites
-// become worthless.
+// SKIPPED, INCONCLUSIVE and UNTRIGGERED are rendered distinctly from passes.
+// A suite that reports skips as passes acquires false confidence, which is
+// how test suites become worthless.
 package report
