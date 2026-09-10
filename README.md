@@ -11,6 +11,20 @@ declared. Those are different questions, and conflating them is a mistake.
 answers the first and has a working group behind it. charpy answers the second.
 It is additive, not a competitor.
 
+## Conformance first, then resilience
+
+**charpy assumes its subject already passes conformance.** That is a precondition, not
+a recommendation. Resilience results for an implementation that is not correct under a
+*correct* sequence are worthless: you cannot tell a fault charpy injected from a bug
+that was there all along, so every finding is suspect and none of them are citable.
+The order is the only one in which either result means anything.
+
+Everything downstream leans on it. A case states the revision, subject class and
+transport it needs; charpy observes to **confirm what a case asserts, or to learn what
+a case deliberately left open** — never to work out the conversation from scratch. The
+fingerprint ladder ([`revisions.md`](docs/design/revisions.md) §3) is the fallback for
+`revision = "auto"`, not the normal shape of a run.
+
 charpy is a hostile MCP peer. It sits in front of, behind, or on both sides of
 an implementation under test, injects faults into an otherwise valid protocol
 exchange, records a correlated transcript of everything that crosses the wire,

@@ -60,8 +60,15 @@ and the list of claims re-verified at each pull.
 ## 3. Fingerprinting
 
 charpy must know which revision the subject speaks before it can choose an oracle, a probe method, or
-an applicable case set. The 2026-07-28 spec prescribes the detection algorithm, so implement that
-rather than inventing one.
+an applicable case set. Usually it is *told*: a run pins a revision, or a case declares an
+`applies_to` range that only one revision in the run satisfies. Fingerprinting is the fallback for
+`revision = "auto"` — and, where a revision is already stated, a way to check the subject agrees.
+This is a consequence of the conformance precondition (README, "Conformance first, then
+resilience"): charpy's subject has already been shown correct under a correct sequence, so charpy
+observes to confirm or to fill a deliberate gap, not to discover the protocol from the traffic.
+
+When it does run, the 2026-07-28 spec prescribes the detection algorithm, so implement that rather
+than inventing one.
 
 ```
 1. POST a modern request carrying MCP-Protocol-Version and _meta.
