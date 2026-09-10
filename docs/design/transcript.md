@@ -241,9 +241,31 @@ than something the schema should paper over.
 
 ### `kind = "malformed"`
 
-A first-class value. charpy deliberately emits frames that no parser accepts, and the transcript must
-represent them without losing `raw`. When `kind` is `malformed`, `id`, `method`, `result_type` and
-`error_code` are null and `id_type` is `absent`; `raw` still holds every byte.
+A first-class value, meaning **the bytes do not denote exactly one JSON-RPC message**. That covers
+bytes no parser accepts, a frame cut mid-stream, an object with nothing to dispatch on — and an
+object carrying *several* dispatchable members at once, such as a `method` beside a `result`.
+charpy emits every one of those deliberately (`faults-and-cases.md` §2, `schema_violation` with
+`target = "envelope"`), so the transcript must represent them without losing `raw`.
+
+The last of those is the one worth stating explicitly, because the alternative is tempting. A
+frame with both a `method` and a `result` could be called a request, on the grounds that
+dispatchers key on the method. That would be charpy asserting a reading of someone else's frame,
+in the column I1, I2 and I3 count — and the whole point of such a frame is that implementations
+*disagree* about it, which is differential-table material rather than something to normalise away.
+So charpy declines: the frame is malformed, it never enters the id-resolution bookkeeping, and
+what the subject made of it is visible in what the subject did next.
+
+The result is two accurate findings rather than one wrong pass. The schema layer, reading `raw`,
+issues a MUST citing the subschema that rejected the frame; I1 separately reports that the request
+never received a valid resolution, because it did not. Both are true and neither is noise. The
+alternative — picking a reading so that the id resolves — buys a quieter report by having I1
+certify a frame that was never a response.
+
+When `kind` is `malformed`, `id`, `method`, `result_type` and `error_code` are null and `id_type`
+is `absent`; `raw` still holds every byte. A member counts toward "exactly one" when the
+transcript can record it: `method` a non-empty string, `error` an object carrying an integer code,
+`result` any JSON value including `null` — a result may be null, an error must be an object, and
+that asymmetry is JSON-RPC's.
 
 ### `raw`
 
@@ -267,10 +289,20 @@ Present when `transport = "http"`, otherwise null.
 ```
 
 Header names are lowercased. Values matching the redaction policy are replaced with
-`"<redacted:sha256:ab12…>"` — a stable digest, so the credential-leak invariant can still prove that
-the *same* secret appeared on both faces without the transcript itself becoming a secret. The digest
-is of the exact value, whole: equality across faces — and therefore I5 — is **verbatim-only**, and a
-re-encoded or embedded secret produces a different digest (`oracle.md` §4, `../open-problems.md`).
+`"<redacted:sha256:4318c2c9…>"` — a stable digest, so the credential-leak invariant can still prove
+that the *same* secret appeared on both faces without the transcript itself becoming a secret. The
+digest is the **whole SHA-256, untruncated**: truncating would trade collision probability for
+transcript size, and charpy has no use for that trade until soak runs make the digest set the
+expensive part (`../open-problems.md`). The digest is also *of* the exact value, whole, so equality
+across faces — and therefore I5 — is **verbatim-only**, and a re-encoded or embedded secret
+produces a different digest (`oracle.md` §4).
+The policy is a list of header *names*, not a heuristic over values: guessing at secrets by shape
+gets it wrong in both directions and makes the file's contents unpredictable, which is bad for
+something people write queries against. `Mcp-Session-Id` is deliberately not on it — the session
+identifier is already carried in the clear in `session` below, and digesting the header while
+printing the field would be incoherent rather than safe. I5 compares session identifiers by value
+instead, which is the stronger comparison of the two (`oracle.md` §4).
+
 Redaction is on by default; `--no-redact` exists for local debugging and stamps `redaction: "off"`
 into the header line so a report generated from it is visibly unsafe to share.
 

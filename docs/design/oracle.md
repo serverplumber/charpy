@@ -142,13 +142,44 @@ Require a correlated two-face transcript. **Skipped, never failed, when `join.vi
 I5 works on redacted transcripts because redaction is a stable digest, not erasure: the invariant
 proves the *same* secret appeared on both faces without the transcript itself becoming a secret.
 
-**Verbatim is a limitation, and the reporting must carry it.** The digest is of the exact bytes,
-so I5 catches a credential forwarded unchanged and misses one the gateway re-encoded — base64-
-wrapped, re-signed into a new JWT, or embedded inside a larger header value. A pass is therefore
-reported as *"no verbatim credential propagation observed"*, never as *"no credential leak"*: the
-stronger claim was not tested, and a pass must not be citable as proof of it. The gap and the
-tractable narrowing (charpy plants the upstream credentials, so it can precompute digests of known
-transformations) are scoped in `../open-problems.md`.
+**But I5 names four things, and the transcript does not carry them the same way, so neither does
+the comparison.** "Verbatim" means something different in each arm:
+
+| What | How the transcript carries it | How I5 compares | What *verbatim* means here |
+|---|---|---|---|
+| Credentials on the redaction policy's name list — `Authorization`, `Cookie`, `X-Api-Key` and the rest (`transcript.md` §5) | A stable digest of the whole value | Digest equality | The entire header value, byte for byte |
+| Session identifiers | In the clear, in `session.mcp_session_id` and in the header beside it | Value comparison | The identifier appearing anywhere in a downstream frame, a larger value included |
+| Internal addresses | In the clear | Value comparison against the upstream descriptor charpy dialled | As above |
+
+Session identifiers are deliberately not digested. `session.mcp_session_id` is a first-class
+transcript field, so digesting the header while printing the field beside it would be incoherent
+rather than safe, and I6 needs the value legible to say *which* session observed *whose* frame — a
+finding reading "session `<redacted:sha256:9f3a…>` observed a frame belonging to
+`<redacted:sha256:1c8e…>`" is not one anybody can act on — and those are elided; the real markers
+carry all sixty-four characters.
+
+The asymmetry runs in charpy's favour and should not be tidied away: a value carried in the clear
+can be found *inside* a larger one, which a digest structurally cannot. The clear-value arms are
+the stronger test. The digest arm is the one carrying the limitation below.
+
+**Verbatim is a limitation of the digest arm, and the reporting must carry it.** The digest is of
+the exact bytes, so that arm catches a credential forwarded unchanged and misses one the gateway
+re-encoded — base64-wrapped, re-signed into a new JWT, or embedded inside a larger header value. A
+pass is therefore reported as *"no verbatim credential propagation observed"*, never as *"no
+credential leak"*: the stronger claim was not tested, and a pass must not be citable as proof of
+it. The gap and the tractable narrowing (charpy plants the upstream credentials, so it can
+precompute digests of known transformations) are scoped in `../open-problems.md`. The opposite
+failure direction — a collision producing a leak report where there was no leak — is not a live
+concern: the digest is the whole SHA-256, untruncated, and stays that way until a membership
+filter earns the trade.
+
+**Both arms are bounded by what charpy knows to look for**, which is the limitation neither
+wording above implies. The digest arm covers the headers on the redaction policy's name list plus
+the credentials charpy planted as the upstream; a credential in a header nobody listed is carried
+in the clear and is not a credential as far as I5 is concerned. The clear-value arms cover the
+session identifiers charpy observed and the upstream descriptor it dialled, not an internal
+address it never saw. I5 checks the propagation of known secrets. It does not discover unknown
+ones, and a pass says nothing about secrets outside the set it was given.
 
 I6 partitions on `session.identity`, charpy's label for the credential it presented. It exists only
 where a protocol-level session does — `<= 2025-11-25`. SEP-2567 removed `Mcp-Session-Id`, so on

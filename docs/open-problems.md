@@ -71,6 +71,63 @@ grounded in evidence.
 
 ---
 
+## I5's digest set does not survive soak scale
+
+**Gap.** I5's evidence is that a redaction digest seen on the upstream face also appeared on the
+downstream one. That is set membership, and at v0 scale it needs no design at all: the oracle is
+offline over a finished file, and an exact `map[string]struct{}` over a run's distinct redacted
+values is correct and small. At soak scale it stops being free — a fleet running for hours
+produces a transcript that need not fit in memory alongside its digest set — and the structure
+anyone reaches for next is approximate, which introduces the one failure this invariant cannot
+afford: charpy reporting that a credential propagated when it did not, the confident, specific,
+wrong accusation that `design/oracle.md` §4 and `design/transcript.md` §4 both name as the
+credibility loss you can spend exactly once.
+
+**Why the digest is carried at full width today.** `transcript.Digest` emits the whole SHA-256,
+untruncated. Truncating trades collision probability for transcript size, and charpy has no use
+for that trade yet: without soak runs the space is there, and at full width collisions stop being
+a consideration rather than being made unlikely. Truncation is something a membership filter buys
+back — when the set is the expensive part, a shorter fingerprint is what makes the filter compact
+— so it is a payment to make once there is something to buy, not in advance. Recording it here so
+that a later change to the digest width is read as what it is: the filter arriving, not a tidy-up.
+
+**The shape the filter has to take.** A bare approximate-membership structure has a false-positive
+rate *by construction*, which converts the risk full-width digests removed into a designed-in one,
+permanently. The only admissible arrangement is the filter as a **pre-filter**: absence is
+definitive and cheap, presence is confirmed by exact comparison before any verdict. A verdict must
+never rest on the probabilistic step alone.
+
+**The structure this wants is an adaptive quotient filter**, and three of its properties are load-
+bearing rather than incidental:
+
+- **Adaptivity.** A static filter charges its false-positive tax on every line carrying the
+  offending value, so one collision recurs the whole way down a transcript. An adaptive filter
+  corrects a false positive once it is detected, and the exact-confirmation step above is exactly
+  the detector — so the pre-filter converges over a sweep instead of staying wrong. The
+  confirmation step is not a compromise the adaptive design tolerates; it is what the adaptive
+  design runs on.
+- **Quotienting is reversible.** Quotient plus remainder reconstructs the hash, so a quotient
+  filter resizes and merges *without the original items*. That is the property soak mode needs: a
+  run's distinct-credential cardinality is not known before the run, so a filter sized up front is
+  sized wrong, and a Bloom filter cannot be resized without the set it no longer has. Merging also
+  suits a fleet — per-client or per-segment filters combined at the end.
+- **Deletion.** Credentials rotate over a soak run. A structure that can only accumulate is a
+  structure whose false-positive rate only degrades.
+
+**Library situation.** No suitable Go implementation is known — not a heavy dependency to weigh,
+an absent one. This is code to write, which is itself part of why v0 stays with the exact set:
+writing a filter to solve a problem no v0 run has is the wrong order.
+`github.com/creachadair/mds` was raised; its `distinct` package is a CVM distinct-elements
+*counter*, which is cardinality estimation rather than membership, so it does not do the filtering
+job. What it does answer, cheaply and today, is the sizing question this entry turns on — how many
+distinct redacted values a run actually faced, and therefore whether the exact set was ever in
+danger of not fitting. That is the measurement that tells you the filter is needed, rather than
+assuming it.
+
+**Trigger to revisit.** Soak mode (v1), where the exact set stops being free. Nothing before it:
+at v0 scale the exact set over full-width digests is both the cheapest and the most correct
+implementation available, which is a pleasant place for an open problem to sit.
+
 ## Production interposition (chaos mode)
 
 **Gap.** Chaos engineering *is* interposition with a fault policy, so people will point charpy at
