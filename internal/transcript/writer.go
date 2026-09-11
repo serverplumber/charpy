@@ -356,24 +356,24 @@ func (w *Writer) WriteHeader(h Header) error {
 
 // Frame captures one frame.
 func (w *Writer) Frame(f Frame) {
-	l, err := w.frameLine(f)
+	l, err := w.FrameLine(f)
 	if err != nil {
 		if w.fail(err); refused(err) {
 			return
 		}
 	}
-	w.emit(&l, &l.common)
+	w.emit(&l, &l.Common)
 }
 
 // Event captures one event.
 func (w *Writer) Event(e Event) {
-	l, err := w.eventLine(e)
+	l, err := w.EventLine(e)
 	if err != nil {
 		if w.fail(err); refused(err) {
 			return
 		}
 	}
-	w.emit(&l, &l.common)
+	w.emit(&l, &l.Common)
 }
 
 // Close flushes the transcript and waits for the writer to finish. It does
@@ -402,14 +402,14 @@ func (w *Writer) Close() error {
 	return w.Err()
 }
 
-// emit stamps the common fields, assigns a sequence number and queues the
+// emit stamps the Common fields, assigns a sequence number and queues the
 // line.
 //
 // Marshalling happens under the same lock that hands out the sequence number,
 // which is what keeps queue order equal to seq order. It costs microseconds
 // against a subject reasoning in milliseconds, and buys the one guarantee
 // every consumer of the transcript relies on.
-func (w *Writer) emit(v any, c *common) {
+func (w *Writer) emit(v any, c *Common) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 

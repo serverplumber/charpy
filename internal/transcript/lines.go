@@ -40,9 +40,15 @@ func refused(err error) bool {
 	return errors.As(err, &r)
 }
 
-// common is on every line, header included, so a single line pasted into a
+// The line structs are the transcript's wire shape, and they are exported
+// because they are read as well as written. One definition serves both
+// directions: a reader with its own mirror of these fields would silently drop
+// whatever a later writer added, which is the drift the registries are kept
+// beside their code to avoid.
+
+// Common is on every line, header included, so a single line pasted into a
 // bug report is still interpretable.
-type common struct {
+type Common struct {
 	SchemaVersion int    `json:"schema_version"`
 	Type          string `json:"type"`
 	RunID         string `json:"run_id"`
@@ -51,38 +57,38 @@ type common struct {
 	TWall         string `json:"t_wall"`
 }
 
-type headerLine struct {
-	common
+type HeaderLine struct {
+	Common
 	CharpyVersion string        `json:"charpy_version"`
 	CharpyCommit  string        `json:"charpy_commit,omitempty"`
 	Seed          string        `json:"seed"`
 	Mode          Mode          `json:"mode"`
-	Subject       subjectLine   `json:"subject"`
-	Revision      *revisionLine `json:"revision,omitempty"`
+	Subject       SubjectLine   `json:"subject"`
+	Revision      *RevisionLine `json:"revision,omitempty"`
 	PolicyDigest  string        `json:"policy_digest,omitempty"`
 	Cases         []string      `json:"cases,omitempty"`
 	Redaction     string        `json:"redaction"`
 	Clock         string        `json:"clock"`
-	Fleet         fleetLine     `json:"fleet"`
+	Fleet         FleetLine     `json:"fleet"`
 }
 
-type subjectLine struct {
+type SubjectLine struct {
 	Class      Class  `json:"class"`
 	Descriptor string `json:"descriptor,omitempty"`
 }
 
-type revisionLine struct {
+type RevisionLine struct {
 	Negotiated revision.Revision   `json:"negotiated"`
 	Offered    []revision.Revision `json:"offered,omitempty"`
 	How        How                 `json:"how,omitempty"`
 }
 
-type fleetLine struct {
+type FleetLine struct {
 	Clients int `json:"clients"`
 }
 
-type frameLine struct {
-	common
+type FrameLine struct {
+	Common
 	Face      Face      `json:"face"`
 	Direction Direction `json:"direction"`
 	Transport Transport `json:"transport"`
@@ -103,14 +109,14 @@ type frameLine struct {
 	RawLen       int               `json:"raw_len"`
 	RawTruncated bool              `json:"raw_truncated"`
 
-	HTTP    *httpLine    `json:"http"`
-	Link    linkLine     `json:"link"`
-	Fault   *faultLine   `json:"fault"`
-	Session *sessionLine `json:"session"`
+	HTTP    *HTTPLine    `json:"http"`
+	Link    LinkLine     `json:"link"`
+	Fault   *FaultLine   `json:"fault"`
+	Session *SessionLine `json:"session"`
 }
 
-type eventLine struct {
-	common
+type EventLine struct {
+	Common
 	EventKind EventKind      `json:"event_kind"`
 	Face      *Face          `json:"face"`
 	Transport *Transport     `json:"transport"`
@@ -119,18 +125,18 @@ type eventLine struct {
 	ConnID    *string        `json:"conn_id"`
 	StreamID  *string        `json:"stream_id"`
 	Detail    map[string]any `json:"detail"`
-	Fault     *faultLine     `json:"fault"`
-	Link      *linkLine      `json:"link"`
+	Fault     *FaultLine     `json:"fault"`
+	Link      *LinkLine      `json:"link"`
 }
 
-type httpLine struct {
+type HTTPLine struct {
 	Status   *int              `json:"status"`
 	Headers  map[string]string `json:"headers"`
 	SSEEvent *string           `json:"sse_event"`
 	SSEID    *string           `json:"sse_id"`
 }
 
-type linkLine struct {
+type LinkLine struct {
 	CharpyID     *string `json:"charpy_id"`
 	Via          Via     `json:"via"`
 	Confidence   float64 `json:"confidence"`
@@ -139,14 +145,14 @@ type linkLine struct {
 	ParentSpanID *string `json:"parent_span_id"`
 }
 
-type faultLine struct {
+type FaultLine struct {
 	CaseID   string         `json:"case_id"`
 	Citation string         `json:"citation"`
 	Kind     string         `json:"kind"`
 	Params   map[string]any `json:"params,omitempty"`
 }
 
-type sessionLine struct {
+type SessionLine struct {
 	MCPSessionID *string `json:"mcp_session_id"`
 	Identity     *string `json:"identity"`
 }
@@ -160,8 +166,8 @@ type sessionLine struct {
 // stamping it with its real capture time would put the file's first line
 // after its second on the clock every consumer sorts by.
 func (w *Writer) headerBytes(h Header) []byte {
-	l := headerLine{
-		common: common{
+	l := HeaderLine{
+		Common: Common{
 			SchemaVersion: SchemaVersion,
 			Type:          "header",
 			RunID:         w.runID,
@@ -173,15 +179,15 @@ func (w *Writer) headerBytes(h Header) []byte {
 		CharpyCommit:  w.run.CharpyCommit,
 		Seed:          w.run.Seed,
 		Mode:          w.run.Mode,
-		Subject:       subjectLine{Class: w.run.Subject.Class, Descriptor: w.run.Subject.Descriptor},
+		Subject:       SubjectLine{Class: w.run.Subject.Class, Descriptor: w.run.Subject.Descriptor},
 		PolicyDigest:  h.PolicyDigest,
 		Cases:         h.Cases,
 		Redaction:     redactionLabel(w.redactor.On()),
 		Clock:         string(w.run.Clock),
-		Fleet:         fleetLine{Clients: w.run.Clients},
+		Fleet:         FleetLine{Clients: w.run.Clients},
 	}
 	if h.Revision != nil {
-		l.Revision = &revisionLine{
+		l.Revision = &RevisionLine{
 			Negotiated: h.Revision.Negotiated,
 			Offered:    h.Revision.Offered,
 			How:        h.Revision.How,
@@ -231,9 +237,9 @@ func validateHeader(h Header) error {
 // noteBytes renders a note event at an already-assigned sequence number. It
 // is the fallback for a line that would not marshal: the sequence stays
 // dense, and the file says what was lost.
-func (w *Writer) noteBytes(c *common, text string) []byte {
-	l := eventLine{
-		common:    common{SchemaVersion: SchemaVersion, Type: "event", RunID: c.RunID, Seq: c.Seq, TMonoNS: c.TMonoNS, TWall: c.TWall},
+func (w *Writer) noteBytes(c *Common, text string) []byte {
+	l := EventLine{
+		Common:    Common{SchemaVersion: SchemaVersion, Type: "event", RunID: c.RunID, Seq: c.Seq, TMonoNS: c.TMonoNS, TWall: c.TWall},
 		EventKind: Note,
 		Detail:    map[string]any{"harness": text},
 	}
@@ -244,7 +250,7 @@ func (w *Writer) noteBytes(c *common, text string) []byte {
 	return b
 }
 
-// frameLine derives a frame line from a Frame.
+// FrameLine derives a frame line from a Frame.
 //
 // Two kinds of problem are handled differently, and the difference is the
 // point. A line that cannot be made valid is refused, because one missing
@@ -253,36 +259,36 @@ func (w *Writer) noteBytes(c *common, text string) []byte {
 // is written without the offending part, because the frame's bytes are the
 // thing the transcript exists to preserve. Both record an error, and both end
 // as exit code 2.
-func (w *Writer) frameLine(f Frame) (frameLine, error) {
+func (w *Writer) FrameLine(f Frame) (FrameLine, error) {
 	var bad []error
 
 	switch f.Face {
 	case Downstream, Upstream:
 	default:
-		return frameLine{}, refuse("transcript: frame has no face (got %q)", f.Face)
+		return FrameLine{}, refuse("transcript: frame has no face (got %q)", f.Face)
 	}
 	switch f.Direction {
 	case C2S, S2C:
 	default:
-		return frameLine{}, refuse("transcript: frame has no direction (got %q)", f.Direction)
+		return FrameLine{}, refuse("transcript: frame has no direction (got %q)", f.Direction)
 	}
 	switch f.Transport {
 	case TransportStdio, TransportHTTP, TransportInproc:
 	default:
-		return frameLine{}, refuse("transcript: frame has no transport (got %q)", f.Transport)
+		return FrameLine{}, refuse("transcript: frame has no transport (got %q)", f.Transport)
 	}
 	// Dimension totality: there is no unknown client or session. In v0 both
 	// are constants, and they are still never absent -- a transcript that
 	// assumes one session is the same mistake as one that assumes one face.
 	if f.ClientID == "" {
-		return frameLine{}, refuse("transcript: frame has no client_id")
+		return FrameLine{}, refuse("transcript: frame has no client_id")
 	}
 	if f.SessionID == "" {
-		return frameLine{}, refuse("transcript: frame has no session_id")
+		return FrameLine{}, refuse("transcript: frame has no session_id")
 	}
 
-	l := frameLine{
-		common:    common{Type: "frame"},
+	l := FrameLine{
+		Common:    Common{Type: "frame"},
 		Face:      f.Face,
 		Direction: f.Direction,
 		Transport: f.Transport,
@@ -348,7 +354,7 @@ func (w *Writer) frameLine(f Frame) (frameLine, error) {
 		if f.Transport != TransportHTTP {
 			bad = append(bad, fmt.Errorf("transcript: http detail on a %s frame; omitted", f.Transport))
 		} else {
-			l.HTTP = w.httpLine(f.HTTP)
+			l.HTTP = w.HTTPLine(f.HTTP)
 		}
 	}
 
@@ -372,7 +378,7 @@ func (w *Writer) frameLine(f Frame) (frameLine, error) {
 			bad = append(bad, fmt.Errorf(
 				"transcript: protocol session on a %s frame, where the protocol has none; omitted", f.Revision))
 		} else {
-			l.Session = &sessionLine{
+			l.Session = &SessionLine{
 				MCPSessionID: optional(f.Session.MCPSessionID),
 				Identity:     optional(f.Session.Identity),
 			}
@@ -382,18 +388,18 @@ func (w *Writer) frameLine(f Frame) (frameLine, error) {
 	return l, errors.Join(bad...)
 }
 
-// eventLine derives an event line from an Event. Events are charpy's own
+// EventLine derives an event line from an Event. Events are charpy's own
 // account of what it did, so an event that cannot be written correctly is
 // refused: an oracle reading a stream_close with no reason cannot evaluate
 // cancellation at all, which is worse than seeing no event.
-func (w *Writer) eventLine(e Event) (eventLine, error) {
+func (w *Writer) EventLine(e Event) (EventLine, error) {
 	var bad []error
 
 	switch e.Kind {
 	case ConnOpen, ConnClose, StreamOpen, StreamClose, SubjectExit,
 		FaultScheduled, FaultApplied, FaultWithdrawn, Probe, ClockAdvance, Note:
 	default:
-		return eventLine{}, refuse("transcript: unknown event kind %q", e.Kind)
+		return EventLine{}, refuse("transcript: unknown event kind %q", e.Kind)
 	}
 
 	detail := e.Detail
@@ -406,27 +412,27 @@ func (w *Writer) eventLine(e Event) (eventLine, error) {
 		switch CloseReason(str(detail["reason"])) {
 		case PeerClose, CharpyClose, SubjectClose, CloseTimeout, CloseError:
 		default:
-			return eventLine{}, refuse(
+			return EventLine{}, refuse(
 				"transcript: stream_close detail.reason is %v; the cancellation invariant needs to know who closed", detail["reason"])
 		}
 	case Probe:
 		if str(detail["method"]) == "" {
-			return eventLine{}, refuse("transcript: probe event has no detail.method")
+			return EventLine{}, refuse("transcript: probe event has no detail.method")
 		}
 		switch ProbeOutcome(str(detail["outcome"])) {
 		case ProbeOK, ProbeError, ProbeTimeout, ProbeRefused:
 		default:
-			return eventLine{}, refuse(
+			return EventLine{}, refuse(
 				"transcript: probe detail.outcome is %v; liveness is computed from outcomes", detail["outcome"])
 		}
 	case FaultScheduled, FaultApplied, FaultWithdrawn:
 		if e.Fault == nil {
-			return eventLine{}, refuse("transcript: %s event does not identify its case", e.Kind)
+			return EventLine{}, refuse("transcript: %s event does not identify its case", e.Kind)
 		}
 	}
 
-	l := eventLine{
-		common:    common{Type: "event"},
+	l := EventLine{
+		Common:    Common{Type: "event"},
 		EventKind: e.Kind,
 		ClientID:  optional(e.ClientID),
 		SessionID: optional(e.SessionID),
@@ -457,7 +463,7 @@ func (w *Writer) eventLine(e Event) (eventLine, error) {
 			// repairable: it is the case audit.
 			switch e.Kind {
 			case FaultScheduled, FaultApplied, FaultWithdrawn:
-				return eventLine{}, refusal{err}
+				return EventLine{}, refusal{err}
 			}
 			bad = append(bad, err)
 		} else {
@@ -480,10 +486,10 @@ func (w *Writer) eventLine(e Event) (eventLine, error) {
 // except for inferred joins where it is the caller's whole point. Only
 // forwarded and traced joins are authoritative, and a transcript that let a
 // guess claim confidence 1.0 would let a gateway verdict rest on one.
-func linkLineFrom(l Link) (linkLine, []error) {
+func linkLineFrom(l Link) (LinkLine, []error) {
 	var bad []error
 
-	out := linkLine{Via: l.Via, CharpyID: optional(l.CharpyID)}
+	out := LinkLine{Via: l.Via, CharpyID: optional(l.CharpyID)}
 
 	// nojoin downgrades to the regime that claims nothing, and drops the join
 	// key with it: charpy_id is the thing you join on, and carrying one under
@@ -540,7 +546,7 @@ func linkLineFrom(l Link) (linkLine, []error) {
 	return out, bad
 }
 
-func faultLineFrom(f *Fault) (*faultLine, error) {
+func faultLineFrom(f *Fault) (*FaultLine, error) {
 	if !caseIDPattern.MatchString(f.CaseID) {
 		return nil, fmt.Errorf("transcript: fault case_id %q is not a case id", f.CaseID)
 	}
@@ -550,13 +556,13 @@ func faultLineFrom(f *Fault) (*faultLine, error) {
 	if f.Kind == "" {
 		return nil, fmt.Errorf("transcript: fault on case %q names no mechanism", f.CaseID)
 	}
-	return &faultLine{CaseID: f.CaseID, Citation: f.Citation, Kind: f.Kind, Params: f.Params}, nil
+	return &FaultLine{CaseID: f.CaseID, Citation: f.Citation, Kind: f.Kind, Params: f.Params}, nil
 }
 
-// httpLine lowercases header names and puts every value through the run's
+// HTTPLine lowercases header names and puts every value through the run's
 // redaction policy.
-func (w *Writer) httpLine(h *HTTP) *httpLine {
-	out := &httpLine{
+func (w *Writer) HTTPLine(h *HTTP) *HTTPLine {
+	out := &HTTPLine{
 		Headers:  make(map[string]string, len(h.Headers)),
 		SSEEvent: optional(h.SSEEvent),
 		SSEID:    optional(h.SSEID),
