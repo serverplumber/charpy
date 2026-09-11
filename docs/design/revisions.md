@@ -140,6 +140,51 @@ Consequences charpy must honour:
 
 ---
 
+## 4.1 Resumability: charpy does not replay, and that is conforming
+
+`Last-Event-ID` resumption exists only through 2025-11-25 — SEP-2567 removed it — so anything built
+for it has a bounded life. The spec's obligation is weaker than it first looks:
+
+> The server **MAY** use this header to replay messages that would have been sent after the last
+> event ID […] The server **MUST NOT** replay messages that would have been delivered on a
+> different stream.
+
+Replay is **MAY**. A server that never replays is fully conforming, so charpy as the reference
+server declines to, holds no event store, and stays correct. The decline is recorded in the
+transcript rather than being silent, because "the client reconnected with `Last-Event-ID` and
+charpy started the stream fresh" is the context for whatever the client does next.
+
+This is also a test rather than merely a saving. A client that only works against a server that
+replays is broken, because the server is permitted not to — and that client exists.
+
+**What it would cost, when the `stream/replay-*` family is wanted.** The sharp case is the
+`MUST NOT`: a server replaying another stream's messages, which is a spec'd prohibition nothing
+currently tests. That one needs a store, and the sizing is settled here so the number is not
+invented later.
+
+The window is whatever one stream emits during a disconnect gap, and the gap is bounded by the SSE
+`retry` field the client **MUST** respect — one to five seconds. Against 121 JSON examples in the
+2025-11-25 spec the median frame is 114 bytes and the largest 850; the fat tail is `tools/list`
+with full `inputSchema`s, for which `transcript.md` §5 already takes 64 KiB as the plausible
+maximum.
+
+| Stream over a 5s gap | Events | Bytes |
+|---|---|---|
+| POST response stream | ~5 | 4 KiB |
+| Chatty notification GET | ~50 | 12 KiB |
+| Same, all fat frames | ~50 | 3,200 KiB |
+
+That last row is why the bound is **bytes and not events**: an event count generous enough for the
+middle row is 270× too large in the worst one. A 64 KiB per-stream budget covers the realistic
+case five times over, and totals stay small where v0 lives — 256 KiB for a CI run of one client and
+one session, 512 KiB for a gateway run. Only a v1 soak fleet makes it interesting, at roughly
+125 MiB for a thousand clients, which is a tuning decision rather than a design one.
+
+The structure already exists: the FIFO store in `internal/interpose` plugged into `mds/cache` with
+`WithSizeFunc`, which is what makes a byte budget free rather than a second implementation.
+
+---
+
 ## 5. Error codes by revision
 
 Revision-dependent, and therefore a per-revision table rather than constants.

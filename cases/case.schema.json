@@ -103,6 +103,19 @@
               {
                 "additionalProperties": false,
                 "properties": {
+                  "keepalive": {
+                    "anyOf": [
+                      {
+                        "const": "none",
+                        "description": "Nothing at all crosses the wire. Tests dead-peer detection and transport-level timeouts: the subject must notice the silence."
+                      },
+                      {
+                        "const": "comments",
+                        "description": "`:` keep-alive lines keep arriving while no data ever does. Tests whether the subject has an application-level timeout at all, since the stream looks perfectly healthy throughout."
+                      }
+                    ],
+                    "description": "Whether SSE keep-alive comments continue while the stream is held. HTTP only; stdio has no such thing. The two are different failure modes and both occur, so neither is the stall. Default: none."
+                  },
                   "kind": {
                     "const": "hang",
                     "description": "Hold a response open and never deliver it. The liveness half of the suite depends on this mechanism's withdrawal behaviour."
@@ -191,6 +204,19 @@
                     ],
                     "description": "Where the cut lands. Default: mid_frame."
                   },
+                  "keepalive": {
+                    "anyOf": [
+                      {
+                        "const": "none",
+                        "description": "Nothing at all crosses the wire. Tests dead-peer detection and transport-level timeouts: the subject must notice the silence."
+                      },
+                      {
+                        "const": "comments",
+                        "description": "`:` keep-alive lines keep arriving while no data ever does. Tests whether the subject has an application-level timeout at all, since the stream looks perfectly healthy throughout."
+                      }
+                    ],
+                    "description": "Whether SSE keep-alive comments continue while the stream is held. HTTP only; stdio has no such thing. The two are different failure modes and both occur, so neither is the stall. Default: none."
+                  },
                   "kind": {
                     "const": "truncate",
                     "description": "Stop mid-frame: emit what was written, then close or stall."
@@ -203,7 +229,7 @@
                       },
                       {
                         "const": "stall",
-                        "description": "Hold the stream open silently."
+                        "description": "Hold the stream open; keepalive decides whether anything keeps arriving on it."
                       }
                     ],
                     "description": "What follows the cut. Default: close."

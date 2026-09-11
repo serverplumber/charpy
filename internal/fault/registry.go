@@ -55,6 +55,12 @@ var mechanisms = []Mechanism{
 					{Name: "stream", Summary: "The whole stream goes silent."},
 					{Name: "connection", Summary: "The whole connection goes silent."},
 				}},
+			{Name: "keepalive", Default: "none",
+				Summary: "Whether SSE keep-alive comments continue while the stream is held. HTTP only; stdio has no such thing. The two are different failure modes and both occur, so neither is the stall.",
+				Values: []Value{
+					{Name: "none", Summary: "Nothing at all crosses the wire. Tests dead-peer detection and transport-level timeouts: the subject must notice the silence."},
+					{Name: "comments", Summary: "`:` keep-alive lines keep arriving while no data ever does. Tests whether the subject has an application-level timeout at all, since the stream looks perfectly healthy throughout."},
+				}},
 			{Name: "then", Default: "deliver",
 				Summary: "What happens at withdrawal.",
 				Values: []Value{
@@ -85,7 +91,13 @@ var mechanisms = []Mechanism{
 				Summary: "What follows the cut.",
 				Values: []Value{
 					{Name: "close", Summary: "Close the stream."},
-					{Name: "stall", Summary: "Hold the stream open silently."},
+					{Name: "stall", Summary: "Hold the stream open; keepalive decides whether anything keeps arriving on it."},
+				}},
+			{Name: "keepalive", Default: "none",
+				Summary: "Whether SSE keep-alive comments continue while the stream is held. HTTP only; stdio has no such thing. The two are different failure modes and both occur, so neither is the stall.",
+				Values: []Value{
+					{Name: "none", Summary: "Nothing at all crosses the wire. Tests dead-peer detection and transport-level timeouts: the subject must notice the silence."},
+					{Name: "comments", Summary: "`:` keep-alive lines keep arriving while no data ever does. Tests whether the subject has an application-level timeout at all, since the stream looks perfectly healthy throughout."},
 				}},
 		},
 	},

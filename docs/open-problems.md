@@ -128,6 +128,80 @@ assuming it.
 at v0 scale the exact set over full-width digests is both the cheapest and the most correct
 implementation available, which is a pleasant place for an open problem to sit.
 
+---
+
+## Emitting a malformed HTTP response
+
+**Gap.** `net/http` will not send a `Content-Length` that disagrees with the body, emit invalid
+chunked framing, reset a connection mid-body, or let a handler hijack an HTTP/2 connection. Those
+are correctness guarantees of a good HTTP implementation and precisely the guarantees a hostile
+peer exists to violate. The library is an obstacle here for the same reason it is excellent
+everywhere else.
+
+**Most of this is reachable without forking anything**, which is the part worth knowing before
+anyone starts:
+
+- **All seven `cut_at` values**, through `http.ResponseWriter` and `http.NewResponseController`.
+  `Flush` is the whole requirement; `SetWriteDeadline` covers holding a response past the server's
+  own limits.
+- **HTTP/1.1 below the response** — a reset, a lying `Content-Length` — through
+  `ResponseController.Hijack` and hand-written bytes on the returned `net.Conn`.
+- **HTTP/2 framing faults**, through `golang.org/x/net/http2`. Its `Framer` carries
+  `AllowIllegalWrites`, documented upstream as permitting frames "that do not conform to the HTTP/2
+  spec […] to test other HTTP/2 implementations' conformance" — charpy's use case, named as such,
+  in a module the Go team maintains. `AllowIllegalReads` is its counterpart, and `WriteRawFrame`,
+  `WriteRSTStream`, `WriteGoAway`, `WriteContinuation` and `WritePushPromise` cover the family.
+  `http2/hpack` is exposed for header encoding.
+
+**What actually remains is code, not questions — but two very different amounts of it**, and the
+split falls exactly along the interposer's three verbs (`design/interposer.md` §2).
+
+`http2.Server` takes a public `NewWriteScheduler` hook, and a `WriteScheduler` sits in the
+frame-write path with `Push` and `Pop`. A scheduler of charpy's own can therefore delay, reorder or
+drop frames the server has queued. It cannot author one: `FrameWriteRequest`'s fields are
+unexported, so a scheduler may only pass through what it was handed.
+
+| Verb | HTTP/2 on a stock `http2.Server` | Owns the connection |
+|---|---|---|
+| **withhold** | A custom `WriteScheduler`. No fork, no own server. | no |
+| **rewrite** | Unreachable — the frame writer is unexported. | yes |
+| **synthesize** | Unreachable. | yes |
+
+So withhold-class HTTP/2 faults — a response that never arrives, frames that arrive out of order —
+are a small piece of work against a supported hook. Rewrite and synthesize mean driving the
+connection with a `Framer`, and since charpy's peer must be *correct* everywhere it is not
+deliberately hostile, that means owning the settings exchange, stream state and HPACK context
+around the faults. `serverConn.Framer()` exists upstream but on an unexported type, so there is no
+way to be served correctly and inject a raw frame on the same connection.
+
+That is the real boundary: not fork versus no fork, but "a scheduler" versus "enough of an HTTP/2
+server to be correct between faults". Days against weeks, and worth knowing which a case needs
+before promising it.
+
+HTTP/1.1 has no equivalent split. Withhold is just declining to write, which `Stall` already does,
+and everything below the response is a hijacked connection and hand-written bytes.
+
+**If it does come to a fork**, the comparison is not fork-versus-nothing. Writing an HTTP server is
+strictly worse on every axis: a fork inherits conformance, TLS, connection management and years of
+accumulated edge cases, and carries a diff; a fresh implementation re-earns all of it and will be
+wrong in ways the fork is not. Maintaining a hostile fork is the cheaper path, not the expensive
+one, and the burden is the rebase, not the authorship.
+
+**The security framing, honestly scoped.** A forked HTTP server must be tracked against upstream
+fixes, but the peer on the other side is the subject under test on a developer's machine, not
+untrusted internet traffic — v0's posture is a dev and staging instrument
+(`design/interposer.md` §5.1). The exposure that would matter belongs to production interposition,
+which is the entry below and has its own reasons to wait.
+
+**Why it is not closed for v0.** The v0 catalogue is frame-shaped and reaches the wire through
+`ResponseWriter`. Everything needing more is already deferred in `design/faults-and-cases.md` §3,
+and the first two bullets above cover it when the time comes.
+
+**Trigger to revisit.** The first case family that needs HTTP/2 framing faults — most plausibly a
+gateway one, since intermediaries are where HTTP/2 gets terminated and re-originated. At that point
+the question is not whether to fork but whether `x/net/http2` alone suffices, and the answer is
+probably yes.
+
 ## Production interposition (chaos mode)
 
 **Gap.** Chaos engineering *is* interposition with a fault policy, so people will point charpy at
