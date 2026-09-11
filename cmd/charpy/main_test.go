@@ -14,6 +14,7 @@ func TestExitCodesAreTheCIContract(t *testing.T) {
 		{"must violation", exitMustViolate, 1},
 		{"harness error", exitHarness, 2},
 		{"subject failed to start", exitSubject, 3},
+		{"invalid policy", exitBadPolicy, 4},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

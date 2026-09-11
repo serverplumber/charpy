@@ -1,6 +1,7 @@
 package catalogue
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
@@ -35,16 +36,16 @@ type Case struct {
 	ID              string    `toml:"id"`
 	AppliesTo       string    `toml:"applies_to"`
 	Subject         []Subject `toml:"subject"`
-	Transport       []string  `toml:"transport"`
+	Transport       []string  `toml:"transport,omitempty"`
 	Verdict         Verdict   `toml:"verdict"`
 	DerivesFrom     string    `toml:"derives_from"`
 	Summary         string    `toml:"summary"`
-	Status          string    `toml:"status"`
-	WithdrawnReason string    `toml:"withdrawn_reason"`
+	Status          string    `toml:"status,omitempty"`
+	WithdrawnReason string    `toml:"withdrawn_reason,omitempty"`
 
-	Match  map[string]any `toml:"match"`
-	Fault  map[string]any `toml:"fault"`
-	Expect map[string]any `toml:"expect"`
+	Match  map[string]any `toml:"match,omitempty"`
+	Fault  map[string]any `toml:"fault,omitempty"`
+	Expect map[string]any `toml:"expect,omitempty"`
 
 	// Resolved during loading.
 	parsedID    ID             `toml:"-"`
@@ -62,7 +63,11 @@ func (c Case) AppliesToRange() revision.Range { return c.parsedRange }
 // parse, so old transcripts and old reports keep resolving.
 func (c Case) Withdrawn() bool { return c.Status == "withdrawn" }
 
-type manifest struct {
+// Manifest is the top-level shape of a case file. It is exported because it
+// is also how a catalogue is rendered back out: `charpy cases` prints TOML,
+// and printing through the same struct the loader reads is what makes the
+// output a valid manifest rather than a report that resembles one.
+type Manifest struct {
 	SchemaVersion int    `toml:"schema_version"`
 	Cases         []Case `toml:"case"`
 }
@@ -118,13 +123,13 @@ func Load(fsys fs.FS, dir string) (*Catalogue, []string, error) {
 			return nil, nil, fmt.Errorf("catalogue: %w", err)
 		}
 
-		var m manifest
+		var m Manifest
 		dec := toml.NewDecoder(strings.NewReader(string(raw)))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&m); err != nil {
 			// Accumulate rather than abort: `charpy policy validate` should
 			// report every broken file in one run, not one per run.
-			errs = append(errs, fmt.Sprintf("%s: %v", name, err))
+			errs = append(errs, decodeErrors(name, err)...)
 			continue
 		}
 		if m.SchemaVersion != 1 {
@@ -151,10 +156,46 @@ func Load(fsys fs.FS, dir string) (*Catalogue, []string, error) {
 	}
 
 	if len(errs) > 0 {
-		return nil, warnings, fmt.Errorf("catalogue: %d error(s):\n  %s",
-			len(errs), strings.Join(errs, "\n  "))
+		return nil, warnings, &LoadError{Errs: errs}
 	}
 	return cat, warnings, nil
+}
+
+// LoadError is what Load returns when manifests do not validate. It keeps the
+// diagnostics as a list rather than one joined string, so a caller can count
+// them and render them without parsing prose back apart.
+type LoadError struct{ Errs []string }
+
+func (e *LoadError) Error() string {
+	return fmt.Sprintf("catalogue: %d error(s):\n  %s", len(e.Errs), strings.Join(e.Errs, "\n  "))
+}
+
+// decodeErrors renders what go-toml knows about a failed decode.
+//
+// This is the one layer that can say where: positions exist during decode and
+// are gone by the time the registry and semantic checks run over plain Go
+// values (policy-format.md §4). So it is worth unwrapping properly rather than
+// printing the library's summary line -- "fields in the document are missing
+// in the target struct" names neither the file, the line, nor the key, which
+// is three-quarters of what a person needs to fix it.
+func decodeErrors(file string, err error) []string {
+	var strict *toml.StrictMissingError
+	if errors.As(err, &strict) {
+		out := make([]string, 0, len(strict.Errors))
+		for i := range strict.Errors {
+			e := &strict.Errors[i]
+			row, col := e.Position()
+			out = append(out, fmt.Sprintf("%s:%d:%d: unknown key %q", file, row, col, strings.Join(e.Key(), ".")))
+		}
+		return out
+	}
+
+	var de *toml.DecodeError
+	if errors.As(err, &de) {
+		row, col := de.Position()
+		return []string{fmt.Sprintf("%s:%d:%d: %s", file, row, col, de.Error())}
+	}
+	return []string{fmt.Sprintf("%s: %v", file, err)}
 }
 
 func validate(cs *Case, file string) (errs, warnings []string) {

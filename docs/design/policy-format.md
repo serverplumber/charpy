@@ -232,6 +232,20 @@ its exact position while the file is being written, which is earlier than any lo
 Either way, an error names the accepted alternatives. A control plane whose error messages require
 reading the source is a control plane people work around.
 
+**A failed validation exits 4**, which is a code of its own rather than a reuse of 2. An invalid
+policy is not charpy breaking, not a MUST violation and not a subject that would not start; it is
+input charpy declines to run on. The code is appended to the table rather than inserted into it, so
+the ordering the CI contract depends on is untouched.
+
+Exiting 0 was considered and is wrong for the reason ADR-006 exists: the whole point of strict
+decoding is that a typo fails *loudly*, and a tool that reports findings on stdout while exiting
+successfully has to be wrapped by every caller that wants a gate. charpy's own justfile already
+carries that wrapper for `gofmt -l`, which is the tool that gets this wrong.
+
+The code is the machine half and is insufficient on its own. The diagnostics above are the
+contract that matters: every broken file in one run rather than the first, each error naming the
+file, the case and the accepted alternatives.
+
 ---
 
 ## 5. Hot swap

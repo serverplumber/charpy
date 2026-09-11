@@ -120,7 +120,15 @@ fails only the oracle.
 | `target` | `envelope` · `result` · `declared_output_schema` · `tool_input_schema` | `result` |
 | `how` | `wrong_type` · `missing_required` · `extra_required_absent` · `enum_out_of_range` | `wrong_type` |
 
-`declared_output_schema` is the sharpest: the *subject's own* `outputSchema` from `tools/list`
+`declared_output_schema` needs the declaration before it can break it. Where charpy serves, the
+schema is charpy's own and there is nothing to find out. Where charpy relays a real server, charpy
+asks: it issues its own `tools/list` and caches what comes back. That is an extra request in the
+transcript and it shifts occurrence counters, which is a real cost and a far smaller one than the
+`dev.charpy/` marker that was deleted for the same class of reason — a `tools/list` is a request
+any client legitimately makes, and it is visible in the transcript rather than hidden inside
+someone else's arguments.
+
+`declared_output_schema` is the sharpest target: the *subject's own* `outputSchema` from `tools/list`
 becomes the oracle. charpy does not need to know what the tool means, only that the server declared
 a shape and then broke it. That is a MUST-eligible finding under `verdict = "MUST"` because the
 rejecting artifact is the subject's own declaration.

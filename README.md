@@ -133,7 +133,7 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 | Test results | JUnit XML, one `<testcase>` per case citation |
 | Report | Static HTML directory, no server, openable locally |
 | Divergence table | Markdown and CSV |
-| Exit code | `0` clean · `1` MUST violation · `2` harness error · `3` subject failed to start |
+| Exit code | `0` clean · `1` MUST violation · `2` harness error · `3` subject failed to start · `4` invalid policy |
 
 ## Documentation
 

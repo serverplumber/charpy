@@ -20,6 +20,7 @@ const (
 	exitMustViolate = 1 // a schema-mechanical MUST was violated
 	exitHarness     = 2 // charpy itself failed
 	exitSubject     = 3 // the subject failed to start
+	exitBadPolicy   = 4 // a policy or case manifest did not validate
 )
 
 // version is stamped at build time with -ldflags.
@@ -46,7 +47,13 @@ func run(args []string) int {
 	case "help", "-h", "--help":
 		usage(os.Stdout)
 		return exitClean
-	case "run", "cases", "policy", "replay", "report":
+	case "cases":
+		return cmdCases(rest, os.Stdout)
+	case "policy":
+		return cmdPolicy(rest, os.Stdout)
+	case "run":
+		return cmdRun(rest, os.Stdout)
+	case "replay", "report":
 		return notImplemented(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "charpy: unknown command %q\n\n", cmd)
@@ -81,7 +88,7 @@ commands:
   version   print the version
 
 exit codes:
-  0  clean          2  harness error
+  0  clean          2  harness error     4  invalid policy
   1  MUST violation 3  subject failed to start
 
 docs: docs/design/

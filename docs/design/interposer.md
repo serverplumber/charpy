@@ -193,6 +193,12 @@ What survives relay, and why, is a direct consequence of earlier decisions:
 | Liveness probes | Gated | The interposer *can* synthesize a probe into a relayed session and swallow the response so the real client never sees it — the ledger already knows how — but that perturbs the subject's session state. Off by default, enabled per case, by the same reasoning that deleted the argument marker (§6). |
 | Cross-SDK differential | Needs owned stimulus | The same script on the same wire three times is the whole method. |
 
+**A relayed run ends on a signal.** Nothing else can end it: the traffic is someone else's, so
+there is no last scripted frame to stop after. `SIGINT` or `SIGTERM` closes the run, which means
+flushing the transcript — a run that never reached a negotiated revision still gets a header — and
+killing the subject charpy spawned, since charpy owns that process. Cases that never matched end
+`UNTRIGGERED`, which is not a failure, so a clean stop exits 0.
+
 Rate-shaped selection (`occurrence_every`, and v1's `[case.select]` population rates) fits relayed
 traffic better than ordinals do; that is the same matcher shape soak mode needs, arriving early.
 

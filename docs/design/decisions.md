@@ -253,8 +253,10 @@ documentation for free. The indirection costs a few files and some structs. v0 h
 correctness of the catalogue is worth more than compactness.
 
 **Dependency direction, fixed here.** The catalogue is the outer layer: it parses manifests and
-compiles them into the domain packages' terms. `fault`, `interpose` and `invariant` never import
-the catalogue — the interposer consumes compiled policy as its own types and knows nothing about
+compiles them into the domain packages' terms. `fault` may import `interpose` — a mechanism is
+expressed as applications of the three verbs, so it has to name them — and that is not a cycle,
+because `interpose` does not import `fault`. What is fixed is that `fault`, `interpose` and
+`invariant` never import the catalogue — the interposer consumes compiled policy as its own types and knows nothing about
 TOML. This is what keeps the future interposer ⇄ catalogue import cycle structurally impossible
 rather than merely avoided.
 

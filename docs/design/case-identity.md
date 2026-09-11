@@ -196,7 +196,33 @@ target when the matcher permits several, generated payload content, and jitter w
 scheduling. `charpy run --case X --revision R --seed S` reproduces the same *injected* behaviour
 byte for byte.
 
-What it cannot reproduce is the subject. A remote server may be differently loaded, may have been
+### How the seed reaches a case
+
+The promise above is only true if a case's randomness depends on the case, and not on what ran
+before it. A single run-level generator drawn from in sequence would make case X's bytes a function
+of which cases preceded it, so `charpy run --case X --seed S` would reproduce X only when X ran
+first — which is the promise being false rather than qualified.
+
+So each draw comes from its own stream, seeded by domain separation:
+
+    ChaCha8( SHA-256( run_seed ‖ case_id ‖ purpose ) )
+
+`math/rand/v2`'s generators are named algorithms rather than an unspecified source, so a seed
+produces the same bytes years later; `math/rand`'s top-level functions never promised that.
+ChaCha8 takes a 32-byte seed, which is exactly SHA-256's output, so nothing is truncated or
+expanded to fit.
+
+*Purpose* is the part that is easy to leave out and expensive to add later. One stream per case
+would still be order-dependent one level down: adding a seeded parameter to a mechanism would shift
+every draw after it, and a citation that promised byte-for-byte reproduction would quietly stop
+delivering it. Naming the draw — `cut_offset`, `payload`, `jitter` — makes each stream independent
+of every other, so a mechanism can grow a parameter without invalidating archived citations.
+
+This is a permanent semantic contract rather than an implementation detail: every archived
+transcript reproduces only while this function returns the same bytes. That is why it is stdlib
+hashing and a specified generator, and why it is written down here beside the promise it keeps.
+
+What the seed cannot reproduce is the subject. A remote server may be differently loaded, may have been
 redeployed, or may simply be nondeterministic. This is why the determinism guarantee lives in the
 oracle rather than the run — see `decisions.md` ADR-001. The seed reproduces what charpy did; the
 transcript records what happened; the oracle turns a transcript into verdicts deterministically and
@@ -218,6 +244,10 @@ Once a case ID has appeared in a tagged release it is permanent.
 | Behaviour changes in a new revision | Narrow `applies_to` on the existing case and add a new case for the new behaviour. Do not mutate a case's meaning under a stable ID. |
 | Family reorganisation | Not supported. This is the cost of putting families in JUnit `classname`, and it is the cost the scheme is deliberately paying for stability. |
 | Typo in an ID | Fix only before the first release that contains it. After that it is permanent and wrong, which is cheaper than a rename. |
+
+`charpy cases` prints TOML, which is the format the catalogue is written in. The output is a valid
+manifest subset, so "show me what would run" pastes back in as "run exactly this" — a property a
+rendered table would not have.
 
 `charpy cases --json` emits the full catalogue with IDs, ranges, sources and status, so external
 tooling can track the set without parsing TOML.
