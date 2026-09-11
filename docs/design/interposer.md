@@ -92,7 +92,7 @@ What each table holds, and what stops it growing:
 | Resolved exchanges | face, connection, wire id | A FIFO window of fixed capacity |
 | Occurrence counters | case, scope, dimension value | Cases × live scope values |
 | Consequence markers | face, connection | The lifetime of the lie |
-| Content digests | digest | A FIFO window of fixed capacity |
+| Content digests *(job 5, later)* | digest | A FIFO window of fixed capacity |
 
 The first, third and fourth are bounded by the conversation: they die with the connection, or with
 the scope value they count within. The other two are the ones that could grow without limit, and
