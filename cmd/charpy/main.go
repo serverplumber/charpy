@@ -53,7 +53,9 @@ func run(args []string) int {
 		return cmdPolicy(rest, os.Stdout)
 	case "run":
 		return cmdRun(rest, os.Stdout)
-	case "replay", "report":
+	case "replay":
+		return cmdReplay(rest, os.Stdout)
+	case "report":
 		return notImplemented(cmd, rest)
 	default:
 		fmt.Fprintf(os.Stderr, "charpy: unknown command %q\n\n", cmd)

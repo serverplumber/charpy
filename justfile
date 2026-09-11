@@ -28,7 +28,7 @@ default:
 # -----------------------------
 
 # Everything CI runs, in the same order
-check: lint vet race
+check: lint vet race determinism
 
 # Build the binary with version stamps
 build:
@@ -57,6 +57,11 @@ lint:
     set -eo pipefail
     out=$(gofmt -l .)
     if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+
+# The determinism guarantee, as a gate rather than an aspiration: replaying one
+# transcript twice must produce byte-identical verdicts (decisions.md ADR-001).
+determinism:
+    {{go}} test ./cmd/charpy -run TestReplayIsByteIdentical -v
 
 # Validate the shipped case catalogue
 cases:
