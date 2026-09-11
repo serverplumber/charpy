@@ -113,7 +113,19 @@ func ParseID(raw json.RawMessage) ID {
 }
 
 // Type reports what the id was.
-func (id ID) Type() IDType { return id.typ }
+//
+// The zero ID reports IDAbsent, so a declared-but-unset ID is the absence of
+// an id member rather than a fourth thing. Every other accessor reads Type
+// rather than the field, which is what keeps the zero value from being a
+// distinct id that collides with every other zero value -- and from putting an
+// empty string in the transcript's id_type column, which the schema does not
+// allow.
+func (id ID) Type() IDType {
+	if id.typ == "" {
+		return IDAbsent
+	}
+	return id.typ
+}
 
 // Text is the canonical text of the id: the digits of a number, the value of
 // a string, the compact JSON of anything JSON-RPC does not permit. Null and
@@ -126,17 +138,17 @@ func (id ID) Raw() json.RawMessage { return id.raw }
 
 // Present reports whether there was an id member at all. A null id is
 // present; a notification's is not.
-func (id ID) Present() bool { return id.typ != IDAbsent }
+func (id ID) Present() bool { return id.Type() != IDAbsent }
 
 // Key is the ledger key: type-qualified, so the number 7 and the string "7"
 // never collide. Charpy's own bookkeeping must distinguish them even where
 // the transcript deliberately does not -- a duplicate_id case with
 // vary_type = true sends both, and a ledger that merged them would wedge the
 // reference peer on charpy's own fault.
-func (id ID) Key() string { return string(id.typ) + ":" + id.text }
+func (id ID) Key() string { return string(id.Type()) + ":" + id.text }
 
 // Equal reports whether two ids are the same id, type included.
-func (id ID) Equal(o ID) bool { return id.typ == o.typ && id.text == o.text }
+func (id ID) Equal(o ID) bool { return id.Type() == o.Type() && id.text == o.text }
 
 // AsString returns the same id carried as a string: the number 7 becomes "7".
 // This is the duplicate_id mechanism's vary_type parameter, which exploits the
@@ -144,14 +156,14 @@ func (id ID) Equal(o ID) bool { return id.typ == o.typ && id.text == o.text }
 // stringified id treats the two as one request, one keying on the typed value
 // does not, and both are defensible.
 func (id ID) AsString() ID {
-	if id.typ == IDString {
+	if id.Type() == IDString {
 		return id
 	}
 	return StringID(id.text)
 }
 
 func (id ID) String() string {
-	switch id.typ {
+	switch id.Type() {
 	case IDAbsent:
 		return "(absent)"
 	case IDNull:

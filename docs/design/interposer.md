@@ -82,7 +82,39 @@ The ledger's jobs, in order of necessity:
    so the transcript keeps attribution straight.
 5. **Emit `link`.** Correlation is a ledger output, not an oracle-side guess — see §6.
 
-## 3.1 Two clocks, two handles
+## 3.1 Retention: every table is bounded, and two of them are windows
+
+What each table holds, and what stops it growing:
+
+| Table | Keyed by | Bounded by |
+|---|---|---|
+| In-flight exchanges | face, connection, wire id | Resolution, or connection close |
+| Resolved exchanges | face, connection, wire id | A FIFO window of fixed capacity |
+| Occurrence counters | case, scope, dimension value | Cases × live scope values |
+| Consequence markers | face, connection | The lifetime of the lie |
+| Content digests | digest | A FIFO window of fixed capacity |
+
+The first, third and fourth are bounded by the conversation: they die with the connection, or with
+the scope value they count within. The other two are the ones that could grow without limit, and
+both are **windows rather than histories** — which is a correctness decision before it is a memory
+one.
+
+A fault that wants "an id resolved earlier" means one resolved *recently*: `faults-and-cases.md` §2
+describes the case as a late duplicate for an id resolved ten frames ago. A content join matches a
+frame charpy originated against one arriving on the other face shortly after, with ordering and
+timing as tie-breakers (§6). An unbounded table does not merely cost memory at soak scale — it lets
+the ledger offer a match against something ten minutes stale, which is a correlation charpy cannot
+support and the credibility rule says not to propose. The bound is what makes the join credible;
+that it also caps memory is a second benefit, not the reason.
+
+Eviction is therefore strictly first-in-first-out, never least-recently-used. An LRU keeps an entry
+alive *because it was read*, which is right for a cache and precisely wrong here: an entry too old
+to be a plausible match must stop being matchable however often something looks at it. Soak-scale
+membership — where even a windowed exact set stops being free — is scoped in `../open-problems.md`.
+
+---
+
+## 3.2 Two clocks, two handles
 
 The ADR-001 boundary runs through the middle of the interposer: fault scheduling
 (`withdraw_after_ms`, `after_mono_ms`) is **injected** time; liveness budgets

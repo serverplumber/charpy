@@ -371,3 +371,29 @@ func TestResultType(t *testing.T) {
 		})
 	}
 }
+
+// A declared-but-unset ID is the absence of an id member, not a fourth kind of
+// id. Without this, every zero ID shares one ledger key and an unset id would
+// reach the transcript as an empty id_type, which the schema rejects.
+func TestZeroIDIsAbsent(t *testing.T) {
+	var zero envelope.ID
+
+	if zero.Type() != envelope.IDAbsent {
+		t.Errorf("zero ID Type() = %q, want absent", zero.Type())
+	}
+	if zero.Present() {
+		t.Error("zero ID reports present")
+	}
+	if got, want := zero.Key(), envelope.AbsentID().Key(); got != want {
+		t.Errorf("zero ID Key() = %q, want %q", got, want)
+	}
+	if !zero.Equal(envelope.AbsentID()) {
+		t.Error("zero ID does not equal AbsentID()")
+	}
+	if got := zero.String(); got != "(absent)" {
+		t.Errorf("zero ID String() = %q", got)
+	}
+	if zero.Key() == envelope.NumberID(0).Key() {
+		t.Error("zero ID collides with the number 0")
+	}
+}
