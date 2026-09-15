@@ -259,19 +259,33 @@ Everyone tests that failure doesn't crash. Almost nobody tests recovery, and rec
 production question — a gateway that stops reconnecting after a transient upstream failure is broken
 in a way no conformance suite will ever notice.
 
-The liveness clock starts at the `fault_withdrawn` event, not at fault application. `probe` events
-carry `method`, `outcome` and `elapsed_mono_ns`; the verdict is computed from them.
+The liveness clock starts at the **fault's end** -- `fault_withdrawn` for a hold, the
+charpy-initiated `stream_close` for a truncation that closes -- not at fault application: the
+question is recovery *after* charpy stops interfering. The driver fires the probe there, on a
+**fresh** session, because after a truncation the client's own session may be wedged and liveness
+is about the subject resuming service, not that session surviving. `probe` events carry `method`,
+`outcome` and `elapsed_mono_ns`; the verdict is read from them offline, and because the probe's
+deadline was the budget, the outcome already encodes within-budget (`ok`) versus not (`timeout`).
+
+Liveness is owned-stimulus only, so in v0 it runs on the proxy: a relayed client cannot be made to
+probe on cue (§5.1), and over stdio a connection-killing fault leaves no session to probe from.
 
 **The probe method is revision-dependent**, because `ping` was removed in 2026-07-28:
 
 | Revision | Probe |
 |---|---|
 | `<= 2025-11-25` | `ping` |
-| `>= 2026-07-28` | `server/discover` |
-| Any, fallback | `tools/list` |
+| `>= 2026-07-28` | `tools/list` |
 
-`tools/list` is the universal fallback and is used whenever the preferred probe is unsupported. It is
-a heavier probe, which is stated in the report so a slow recovery is not misread as a slow probe.
+`server/discover` would be the natural 2026-07-28 probe, but the SDK client issues it only inside
+`Connect` and cannot re-issue it afterwards, so `tools/list` -- the universal fallback -- stands in.
+It is a heavier probe, which is stated in the report so a slow recovery is not misread as a slow
+probe.
+
+A liveness verdict is `OBSERVED`, never `MUST`: recovery has no generated artifact behind it, so
+the layer reports the fact -- recovered, or did not recover within the budget -- for a human to
+weigh rather than failing the build. Reporting the *success* is the point; almost nobody tests
+recovery, so "recovered in 1.2s" is the observation worth making, not a silence.
 
 Liveness budgets are declared per case as `liveness_probe_within_ms` and are **real-time**, not
 injected — the subject's own deadlines and reconnect backoff are real-time and charpy cannot compress

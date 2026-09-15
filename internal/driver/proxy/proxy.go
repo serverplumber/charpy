@@ -107,6 +107,13 @@ func New(o Options) (*Proxy, error) {
 	}, nil
 }
 
+// RecordProbe records a liveness probe's outcome. The probe itself is an
+// ordinary request the client makes through the proxy; this is the summary the
+// oracle's liveness layer reads.
+func (p *Proxy) RecordProbe(method string, outcome transcript.ProbeOutcome, elapsedNS int64) {
+	p.x.Conn(p.o.ClientID, p.o.SessionID, p.o.ConnID).Probe(method, outcome, elapsedNS)
+}
+
 // ServeHTTP forwards one request to the subject and relays the response,
 // faulting whichever direction a case matched.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {

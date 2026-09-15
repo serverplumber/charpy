@@ -212,5 +212,19 @@ func (n *Conn) StreamClose(reason transcript.CloseReason, bytesWritten int) {
 // Face is the run's subject face, for callers that key ledger state on it.
 func (n *Conn) Face() transcript.Face { return n.core.Face }
 
+// Probe records a liveness probe: which method was sent, how it fared, how
+// long it took. The oracle's liveness layer reads these to judge recovery.
+func (n *Conn) Probe(method string, outcome transcript.ProbeOutcome, elapsedNS int64) {
+	n.core.Transcript.Event(transcript.Event{
+		Kind: transcript.Probe, Face: n.core.Face, Transport: n.core.Transport,
+		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
+		Detail: map[string]any{
+			"method":          method,
+			"outcome":         string(outcome),
+			"elapsed_mono_ns": elapsedNS,
+		},
+	})
+}
+
 // ConnID is this connection's id, for the ledger calls a driver makes directly.
 func (n *Conn) ConnID() string { return n.connID }

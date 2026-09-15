@@ -11,6 +11,7 @@ import (
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/oracle/coverage"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
+	"github.com/serverplumber/charpy/internal/oracle/liveness"
 	"github.com/serverplumber/charpy/internal/oracle/schemacheck"
 	"github.com/serverplumber/charpy/internal/report"
 	"github.com/serverplumber/charpy/internal/transcript"
@@ -27,7 +28,7 @@ func cmdReplay(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	format := fs.String("format", "text", "text, jsonl or junit")
-	only := fs.String("oracle", "", "run one layer: schema, invariant or coverage")
+	only := fs.String("oracle", "", "run one layer: schema, invariant, coverage or liveness")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy replay [flags] <transcript.jsonl>\n\n")
 		fs.PrintDefaults()
@@ -102,9 +103,13 @@ func judge(t *transcript.Transcript, only string) (oracle.Report, int) {
 	if only == "" || only == coverage.Layer {
 		rep.Findings = append(rep.Findings, coverage.Check(t).Findings...)
 	}
-	if only != "" && only != schemacheck.Layer && only != invariant.Layer && only != coverage.Layer {
+	if only == "" || only == liveness.Layer {
+		rep.Findings = append(rep.Findings, liveness.Check(t).Findings...)
+	}
+	if only != "" && only != schemacheck.Layer && only != invariant.Layer &&
+		only != coverage.Layer && only != liveness.Layer {
 		fmt.Fprintf(os.Stderr, "charpy replay: unknown oracle %q; v0 has %s and %s\n",
-			only, schemacheck.Layer, invariant.Layer+", "+coverage.Layer)
+			only, schemacheck.Layer, invariant.Layer+", "+coverage.Layer+", "+liveness.Layer)
 		return rep, exitHarness
 	}
 

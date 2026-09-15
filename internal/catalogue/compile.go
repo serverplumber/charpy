@@ -40,11 +40,28 @@ func (c Case) Compile(r revision.Revision, seed string) (interpose.Case, error) 
 	}
 
 	return interpose.Case{
-		ID:       c.ID,
-		Citation: cited.String(),
-		Match:    m,
-		Fault:    interpose.Fault{Kind: faultKind(c.Fault), Params: faultParams(c.Fault)},
+		ID:               c.ID,
+		Citation:         cited.String(),
+		Match:            m,
+		Fault:            interpose.Fault{Kind: faultKind(c.Fault), Params: faultParams(c.Fault)},
+		LivenessWithinMS: livenessBudget(c.Expect),
 	}, nil
+}
+
+// livenessBudget reads [case.expect].liveness_probe_within_ms, already
+// validated as an integer by the loader. It is the one expect key a driver
+// consumes; the rest stays oracle input.
+func livenessBudget(expect map[string]any) int64 {
+	switch v := expect["liveness_probe_within_ms"].(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	default:
+		return 0
+	}
 }
 
 // CompileAll compiles every active case that applies to a revision.

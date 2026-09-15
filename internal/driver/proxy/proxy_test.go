@@ -204,6 +204,35 @@ func TestATruncationCutsARealEventStream(t *testing.T) {
 	}
 }
 
+// Liveness end to end: a truncation breaks the client's call, then charpy
+// probes the subject on the same HTTP session -- which survives a broken
+// response stream -- and the subject answers. The oracle reads the probe as a
+// recovery.
+func TestATruncationIsFollowedByARecoveryProbe(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:       "stream/truncate-mid-event",
+		Citation: "stream/truncate-mid-event@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method:    interpose.ParseGlob("tools/call"),
+			Direction: transcript.S2C,
+		},
+		Fault:            interpose.Fault{Kind: "truncate", Params: map[string]any{"cut_at": "mid_event", "then": "close"}},
+		LivenessWithinMS: 10000,
+	}, revision.V20251125)
+
+	probes := r.events(string(transcript.Probe))
+	if len(probes) != 1 {
+		t.Fatalf("want one probe after the truncation, got %d", len(probes))
+	}
+	d, _ := probes[0]["detail"].(map[string]any)
+	if d["outcome"] != "ok" {
+		t.Errorf("probe outcome = %v, want ok (the subject recovered on the surviving session)", d["outcome"])
+	}
+	if d["method"] != "ping" {
+		t.Errorf("probe method = %v, want ping on 2025-11-25", d["method"])
+	}
+}
+
 // event_boundary delivers the whole event and stops the stream: nothing
 // malformed is ever seen, which is the least dramatic variant and the one most
 // likely to find a subject that mishandles a clean early close.

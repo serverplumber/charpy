@@ -116,6 +116,14 @@ func (s *Script) Run(ctx context.Context) error {
 	}
 
 	scriptErr := s.run(sctx, sess)
+
+	// Liveness: after a fault has acted, does the subject serve again within
+	// the budget? Only when the case asked (a budget) and a fault actually
+	// interrupted the stimulus -- a clean script had nothing to recover from.
+	if s.o.Case.LivenessWithinMS > 0 && faultInterrupted(scriptErr) {
+		s.livenessProbe()
+	}
+
 	halt.Done()
 	_ = sess.Close()
 
@@ -130,6 +138,31 @@ func (s *Script) Run(ctx context.Context) error {
 	return nil
 }
 
+// livenessProbe opens a fresh session to the subject and asks whether it is
+// serving again. Fresh, not the scenario's session: after a truncation the
+// client's own session may be wedged, and liveness is about the subject
+// resuming service, not that session surviving. Dialing is part of the probe --
+// a subject that will not accept a new connection has not recovered -- so a
+// failed dial is a probe outcome, not an error to return.
+func (s *Script) livenessProbe() {
+	budget := time.Duration(s.o.Case.LivenessWithinMS) * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
+	defer cancel()
+
+	method := scenario.ProbeMethod(s.o.Era)
+	start := time.Now()
+
+	sess, err := peer.DialHTTP(ctx, s.Endpoint(), peer.Options{Era: s.o.Era})
+	if err != nil {
+		s.proxy.RecordProbe(method, scenario.Classify(ctx, err), time.Since(start).Nanoseconds())
+		return
+	}
+	defer sess.Close()
+
+	res := scenario.Probe(ctx, sess, s.o.Era)
+	s.proxy.RecordProbe(res.Method, res.Outcome, time.Since(start).Nanoseconds())
+}
+
 // shutdown stops the ingress, giving in-flight handlers a moment to finish and
 // then forcing them: a held stream would otherwise keep a graceful shutdown
 // waiting for a response charpy is deliberately withholding.
@@ -139,6 +172,13 @@ func (s *Script) shutdown() {
 	if err := s.srv.Shutdown(ctx); err != nil {
 		_ = s.srv.Close()
 	}
+}
+
+// faultInterrupted reports whether a fault broke the stimulus -- a call the
+// wire cut, or a hold released. A finished script had nothing to recover from,
+// so it gets no probe.
+func faultInterrupted(err error) bool {
+	return errors.Is(err, scenario.ErrStimulusInterrupted) || errors.Is(err, scenario.ErrWithdrawn)
 }
 
 func cleanEnd(err error) bool {

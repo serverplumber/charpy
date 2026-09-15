@@ -26,6 +26,13 @@ type Case struct {
 	Citation string
 	Match    Match
 	Fault    Fault
+
+	// LivenessWithinMS is the one piece of [case.expect] a driver needs: the
+	// budget for the recovery probe it fires after the fault acts. The
+	// interposer still evaluates none of expect -- this is carried for the
+	// driver's probe timing, and the oracle judges the outcome offline. Zero
+	// means the case declares no liveness probe.
+	LivenessWithinMS int64
 }
 
 // Fault names a mechanism from the registry in internal/fault, with the

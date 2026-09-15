@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/transcript"
 )
 
 // A Scenario originates the traffic one case needs. It is a function, not an
@@ -116,6 +119,60 @@ func Basic(m interpose.Match, o Options) (Scenario, error) {
 		}
 		return nil
 	}, nil
+}
+
+// ProbeResult is the outcome of a liveness probe: which method was sent, how
+// it fared, and how long it took.
+type ProbeResult struct {
+	Method  string
+	Outcome transcript.ProbeOutcome
+	Elapsed time.Duration
+}
+
+// Probe asks whether the subject is serving again after a fault acted on it.
+// It sends the revision-appropriate probe on the session and reports the
+// outcome; the caller bounds it with the case's budget via ctx, and opens a
+// fresh session so the probe measures the subject resuming service rather than
+// a wedged session surviving.
+//
+// ping through 2025-11-25; tools/list from 2026-07-28, where ping is gone and
+// server/discover is not a method the client can re-issue after connecting
+// (docs/design/oracle.md section 6). tools/list is heavier, which the report
+// notes so a slow recovery is not misread as a slow probe.
+func Probe(ctx context.Context, sess *mcp.ClientSession, era revision.Revision) ProbeResult {
+	method := ProbeMethod(era)
+	start := time.Now()
+	var err error
+	switch method {
+	case "ping":
+		err = sess.Ping(ctx, nil)
+	default:
+		_, err = sess.ListTools(ctx, nil)
+	}
+	return ProbeResult{Method: method, Outcome: Classify(ctx, err), Elapsed: time.Since(start)}
+}
+
+// ProbeMethod is the liveness probe for an era: ping through 2025-11-25,
+// tools/list from 2026-07-28 (ping removed, server/discover not re-issuable).
+func ProbeMethod(era revision.Revision) string {
+	if era >= revision.V20260728 {
+		return "tools/list"
+	}
+	return "ping"
+}
+
+// Classify turns a probe's error into an outcome: none is recovery, a deadline
+// is a subject that did not recover in the budget, anything else an error --
+// including a fresh connection the subject would not even accept.
+func Classify(ctx context.Context, err error) transcript.ProbeOutcome {
+	switch {
+	case err == nil:
+		return transcript.ProbeOK
+	case ctx.Err() == context.DeadlineExceeded:
+		return transcript.ProbeTimeout
+	default:
+		return transcript.ProbeError
+	}
 }
 
 // Repeats is how many matching frames a case needs before its fault can
