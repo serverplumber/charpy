@@ -16,6 +16,8 @@ decision to be revisited.
 | ADR-008 | Truncation variants are case parameters, not separate faults | Fault taxonomy |
 | ADR-009 | Registries live with the code they describe | Package boundaries |
 | ADR-010 | One reference peer and an interposer; no feral peer | Architecture |
+| ADR-011 | The reference peer is the Go SDK, pinned to a pre-release, seamed at bytes | Reference peer |
+| ADR-012 | One case armed per run under owned stimulus | Scenario player |
 
 ---
 
@@ -320,3 +322,118 @@ and the templates rather than by two peers.
 **Revisit if.** A case genuinely requires charpy to *coherently* speak one era over a connection
 whose configuration is another — sustained live translation. None is known, and §4 of
 `interposer.md` is the argument none should exist.
+
+---
+
+## ADR-011 — The reference peer is the Go SDK, pinned to a pre-release, seamed at bytes
+
+**Question.** `interposer.md` §1 said "the official Go SDK" and no file named a module or a
+version. Which module, at which version, and where exactly does it attach to the interposer?
+
+**Decision.** `github.com/modelcontextprotocol/go-sdk`, pinned to **v1.8.0-pre.2**, attached at
+the SDK's **byte layer** rather than at the `mcp.Transport` interface. Move to v1.8.0 when it is
+tagged. Only the Go SDK is pinned now; the TypeScript and Python peers ADR-004 also names arrive
+with the cross-SDK differential, because a lockfile nothing builds against is a pin nothing
+verifies.
+
+**Why a pre-release.** §1 promises the peer's era is a constructor parameter, and the whole
+era-lying decomposition in §4 rests on it: coherent speech in an era is *configuration*, which is
+what makes a live translator unnecessary. On the latest stable, v1.7.0, that promise is false on
+both faces. `ClientSessionOptions.protocolVersion` is unexported and marked "for testing", so a
+client peer always opens at 2026-07-28 and, when `server/discover` fails, hardcodes the legacy
+`initialize` at 2025-11-25. There is no server-side control at all: the legacy handler calls
+`negotiatedVersion(clientVersion)`, which does not consult the transport's
+`ProtocolVersionSupporter` set.
+
+The obvious workaround — the interposer rewrites the outbound `initialize` params — is not free,
+and its cost disqualifies it. `Client.capabilities` is version-sensitive: elicitation `form` is
+gated at `>= 2025-11-25`. Rewriting the wire's `protocolVersion` from 2025-11-25 down to
+2025-06-18 therefore ships a 2025-06-18 `initialize` carrying a 2025-11-25 capability, on every
+legacy-era run, silently. charpy would be injecting an undeclared capability fault underneath
+every case it declares, which is the one thing a suite that reports faults cannot do. v1.8.0-pre.2
+exports `ClientSessionOptions.ProtocolVersion` and `ServerOptions.SupportedProtocolVersions`, and
+teaches `negotiatedVersion` to take the server's set, so the promise becomes true rather than
+approximated. A pre-release pin at v0 is the cheaper honesty.
+
+**Why bytes rather than `Transport`.** `mcp.Transport` yields a `Connection` that reads and writes
+`jsonrpc.Message` — already parsed. charpy's interposer surface is `envelope.Message`, which
+carries the raw bytes, and `wire.Encoded.Cut` cuts at byte offsets. Implementing `Transport` would
+mean re-encoding through `jsonrpc.EncodeMessage`, so the ledger's *intent* column would hold bytes
+charpy authored rather than bytes the SDK authored, and §6's content join would digest charpy's
+encoding of the SDK's frame instead of the frame. Two seams instead, both below `Transport`:
+`mcp.IOTransport` over an `io.Pipe` pair for stdio-shaped traffic, and
+`mcp.StreamableClientTransport` with a charpy `http.RoundTripper` for HTTP. Still self-MITM, one
+level lower; `envelope` and `wire` remain the only parsers charpy has. §1's "plugs into the
+interposer as its `Transport`" is amended to say so.
+
+Two knobs come with the seam. `IOTransport.MaxLineLength` defaults to 16 MiB and is set negative
+on the reference peer: a size cap inside charpy's own peer would turn a subject's oversized frame
+into a peer-side error instead of an observation. And a subject frame the SDK cannot decode is
+handed on unrepaired — repairing it for the peer's benefit would hide the finding — so the peer
+dying of a subject's response is a recorded outcome, not a crash.
+
+**Consequences.**
+
+- **The transcript names its peer.** `charpy_version` says what judged the run, not what spoke in
+  it, so an owned-stimulus transcript was not reproducible from its own contents. The header grows
+  a `peer` object — module, version, era requested — which guarantee 6 makes additive within
+  `schema_version: 1`. Absent under relay, where there is no peer to name.
+- **`draft` is unreachable under owned stimulus.** The SDK tracks dated revisions only, and
+  `revisions.md` §1 deliberately puts draft last so every open-ended `applies_to` includes it. A
+  draft-only case against the reference peer is `SKIPPED` with that reason, not `UNTRIGGERED`: the
+  fault never had a peer that could carry it. `internal/peer` guards both directions of the skew.
+- **Eight transitive modules.** `mcp` plus `jsonrpc` pull jsonschema-go, segmentio/encoding and
+  asm, uritemplate, and four `golang.org/x` modules; go-cmp and x/tools are test-only and drop.
+  charpy had three direct dependencies. `go.sum` pins all of it, so hermeticity holds, but it is a
+  step change worth stating rather than discovering.
+
+**Revisit if.** v1.8.0 ships without the exported era options, or ships them with different
+semantics — then the pin stays at the pre-release and this ADR records why. Or the byte seam
+proves unable to express something `Transport` could: nothing known needs it, since every verb
+operates on bytes by construction.
+
+---
+
+## ADR-012 — One case armed per run under owned stimulus
+
+**Question.** The matcher takes a set — `NewMatcher(ledger, cases...)`, `Select(f) []Case` — so a
+run can arm the whole applicable catalogue against one session. Under owned stimulus, should it?
+
+**Decision.** No. One case per run: the scenario player runs one script per case, serially, and
+each produces its own transcript. Relayed runs keep arming many at once.
+
+**Why.** The first reason is what the output is for. A transcript carrying eleven injected faults
+is not a finding, it is a puzzle, and the person opening it has most likely never run a hostile
+fixture against anything. One fault, one transcript, one thing to fix is the unit that can be
+acted on, and a suite whose output cannot be acted on does not get used twice. charpy's whole
+premise is that its findings are citable; a citation nobody can isolate is not one.
+
+The reproducibility argument arrives second and independently. `case-identity.md` §5 promises
+`case-id + revision + seed` fully determines a run. §5 already repaired the seed-stream version of
+that promise with per-purpose domain separation. Owned stimulus exposes a second version it does
+not cover: case A's fault changes what the peer does next — `truncate` with `then = "close"` ends
+the stream, so the call case B was waiting for never happens — which changes what frames case B
+ever sees. Arm A and B together and B's traffic differs from B alone, so `charpy run --case B
+--seed S` reproduces B only when B ran first. One case per run makes the promise literally true
+rather than qualified, because there is no other armed fault for the traffic to depend on.
+
+The cost is a subject session per case. That is already the model `internal/driver/stdio` documents
+for stdio subjects, which spawn per case and may run concurrently, so this generalises an existing
+shape rather than introducing one. In CI it is wall-clock and nothing else.
+
+**Why relay is different.** Nothing there controls the traffic, so isolating a case buys no
+determinism — the frames arrive when someone else's client sends them, and `UNTRIGGERED` is the
+expected outcome for most cases (`oracle.md` §2). Arming one case per relayed session would
+multiply sessions without making any of them reproducible. The asymmetry is real and is stated
+where it bites rather than smoothed over.
+
+The output stays legible either way because the report is already keyed by citation, one
+`<testcase>` per finding (`internal/report`), so a relayed transcript that does fire three faults
+still reports three separate findings.
+
+**Consequence.** `charpy run --case 'stream/*'` under owned stimulus is a loop over matching cases,
+not one session with a glob armed. The CLI surface does not change; what it does per case does.
+
+**Revisit if.** Soak mode (v1) wants sustained concurrent faults against one long-lived session,
+which is a different product — `soak.md` finds leaks rather than bugs, and a leak needs pressure
+rather than isolation. That is an argument for soak arming many, not for v0 doing so.

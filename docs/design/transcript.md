@@ -377,6 +377,8 @@ Exactly one, first.
   "seed": "8f2c1a",
   "mode": "proxy",                  // proxy | hostile-server | stdio-ingress | inproc
   "subject": { "class": "gateway", "descriptor": "http://localhost:8080/mcp" },
+  "peer": { "module": "github.com/modelcontextprotocol/go-sdk",   // absent under relay
+            "version": "v1.8.0-pre.2", "era": "2025-11-25" },
   "revision": { "negotiated": "2025-11-25", "offered": ["2026-07-28", "2025-11-25"],
                 "how": "initialize" },
   "policy_digest": "sha256:...",
@@ -389,6 +391,14 @@ Exactly one, first.
 
 `policy_digest` makes a transcript self-describing about what produced it. A verdict re-derived
 months later can state which policy was in force without that policy having survived.
+
+`peer` does the same for the stimulus. `charpy_version` says what judged the run, not what spoke in
+it, and ADR-004 promises a divergence table published today reproduces a year from now — which it
+cannot if the transcript does not record which SDK, at which pin, said the words. It is absent
+under relay, where the traffic is somebody else's and there is no peer to name. `era` is the
+revision charpy *asked* the peer to speak; `revision.negotiated` is what the conversation settled
+on. They differ whenever a subject refuses the ask or a fault rewrites it in flight, which is why
+they are separate columns.
 
 ---
 

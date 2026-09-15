@@ -138,6 +138,17 @@
           },
           "additionalProperties": false
         },
+        "peer": {
+          "type": "object",
+          "description": "The reference peer that originated the stimulus. Absent under relay, where the traffic is somebody else's. era is the revision charpy asked the peer to speak, not necessarily the one the run negotiated.",
+          "required": ["module", "version"],
+          "properties": {
+            "module": { "type": "string", "minLength": 1 },
+            "version": { "type": "string", "minLength": 1 },
+            "era": { "$ref": "#/$defs/revision" }
+          },
+          "additionalProperties": false
+        },
         "revision": {
           "type": "object",
           "required": ["negotiated"],

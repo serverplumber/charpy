@@ -162,6 +162,13 @@ just repl      # open a transcript in duckdb, view `t` bound to it
 A Nix shell (`shell.nix`) provides Go, plus node and python3 for the cross-SDK
 reference peers and duckdb for transcript queries.
 
+The reference peer — the always-correct side of every run charpy originates — is
+`github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod`. It is a pre-release
+pin while v1.8.0 is unreleased, because the exported era controls charpy's design
+depends on land there; [ADR-011](docs/design/decisions.md) records the reasoning
+and what the alternative would have cost. The TypeScript and Python peers arrive
+with the cross-SDK differential.
+
 ## License
 
 Not yet chosen.

@@ -45,6 +45,12 @@ type Run struct {
 	Mode    Mode
 	Subject Subject
 	Clock   clock.Mode
+	// Peer identifies the reference peer that originated the stimulus. Nil
+	// under relay, where the traffic is somebody else's and there is no peer
+	// to name. ADR-004 promises a divergence table published today reproduces
+	// a year from now, and it cannot without this: charpy_version says what
+	// judged the run, not what spoke in it.
+	Peer *Peer
 	// Clients is the synthetic client population. Always 1 in v0; soak mode
 	// drives many. Zero is read as 1.
 	Clients int
@@ -54,6 +60,17 @@ type Run struct {
 type Subject struct {
 	Class      Class
 	Descriptor string
+}
+
+// Peer is the reference peer charpy originated stimulus with: which SDK, at
+// which version, configured for which era. Era is the revision charpy asked
+// the peer to speak, which is not always the one the run negotiated -- a
+// subject may refuse it, and a fault may rewrite it in flight. The negotiated
+// revision is recorded separately, in Header.Revision.
+type Peer struct {
+	Module  string
+	Version string
+	Era     revision.Revision
 }
 
 // Header is the half of the header known only once the run has started: what
@@ -304,6 +321,14 @@ func validateRun(r *Run) error {
 	}
 	if r.CharpyVersion == "" {
 		return errors.New("transcript: Run.CharpyVersion is required")
+	}
+	if r.Peer != nil {
+		if r.Peer.Module == "" || r.Peer.Version == "" {
+			return errors.New("transcript: Run.Peer needs both a module and a version")
+		}
+		if r.Peer.Era != "" && !revision.Known(r.Peer.Era) {
+			return fmt.Errorf("transcript: peer era %q is not a revision charpy knows", r.Peer.Era)
+		}
 	}
 	if r.Clients <= 0 {
 		r.Clients = 1

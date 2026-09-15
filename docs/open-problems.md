@@ -130,6 +130,38 @@ implementation available, which is a pleasant place for an open problem to sit.
 
 ---
 
+## A held frame cannot be delivered after an HTTP response ends
+
+**Gap.** The `hang` mechanism withholds a frame and, when the fault withdraws, does something with
+it: `then = "deliver"` sends it late, `then = "error"` sends a `-32603` in its place. Over stdio
+the shim does exactly that -- the pipe is still open, so `release` delivers or errors on it. Over
+HTTP the proxy cannot: once charpy's handler has returned, the client's response is closed, and a
+frame withdrawn afterwards has no open stream to arrive on. `releaseHold` records the withdrawal
+and drops the action, noting it in the transcript.
+
+**Why it exists.** "Hold, then deliver later" assumes a persistent bidirectional channel. stdio is
+one; a Streamable HTTP POST response is a one-shot the server closes when it is done answering.
+The asymmetry is the transport's, not charpy's -- the same reason `interposer.md` §5.1 lists what
+survives relay differently per transport.
+
+**Why it is not closed for v0.** Nothing exercises it. Every `hang` case in the catalogue is
+`family = gateway`, `face = "upstream"`, and the one-faced proxy does not run gateway cases
+(`stream/truncate-*` are the only HTTP cases, and they cut rather than hold). So the gap is real
+but currently unreachable, and closing it speculatively would be inventing a delivery channel for
+a case that cannot yet arrive.
+
+**What closing it would take.** A held-then-deliver over HTTP has to keep the response stream open
+past the point the subject stopped writing -- charpy holds the SSE stream itself, delivers the
+withdrawn frame onto it when the timer fires, then closes. That is `wire.SSE` staying open under
+charpy's control rather than the handler returning, which is close to what `wire.Stall` already
+does; the withdrawal would flush onto the stalled stream instead of ending it. It becomes worth
+building when a `hang` case is first made HTTP-runnable, which is a gateway run (item 14) or an
+HTTP variant of a response-hang case.
+
+**Trigger to revisit.** The first `hang` case that applies to an HTTP subject.
+
+---
+
 ## Emitting a malformed HTTP response
 
 **Gap.** `net/http` will not send a `Content-Length` that disagrees with the body, emit invalid

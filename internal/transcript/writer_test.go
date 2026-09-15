@@ -284,6 +284,44 @@ func TestHeaderCarriesRunStart(t *testing.T) {
 	}
 }
 
+// ADR-004 promises a divergence table published today reproduces a year from
+// now, and ADR-011 makes the transcript carry what that needs: which peer
+// spoke, at which pin. Absent under relay, where nothing charpy owns
+// originated the traffic.
+func TestHeaderNamesTheReferencePeer(t *testing.T) {
+	r := newRig(t, func(o *transcript.Options) {
+		o.Run.Peer = &transcript.Peer{
+			Module:  "github.com/modelcontextprotocol/go-sdk",
+			Version: "v1.8.0-pre.2",
+			Era:     revision.V20250618,
+		}
+	})
+	r.header(t)
+
+	lines := r.close(t)
+	m := decode(t, lines[0])
+	peer, ok := m["peer"].(map[string]any)
+	if !ok {
+		t.Fatalf("header carries no peer object: %s", lines[0])
+	}
+	if got := peer["version"].(string); got != "v1.8.0-pre.2" {
+		t.Errorf("peer version = %q, want the pin", got)
+	}
+	// The era charpy asked for, not the revision the run negotiated. Those
+	// are different columns because a subject may refuse the ask and a fault
+	// may rewrite it in flight.
+	if got := peer["era"].(string); got != string(revision.V20250618) {
+		t.Errorf("peer era = %q, want %s", got, revision.V20250618)
+	}
+	validateAll(t, compileSchema(t), lines)
+
+	plain := newRig(t)
+	plain.header(t)
+	if _, ok := decode(t, plain.close(t)[0])["peer"]; ok {
+		t.Error("a run with no reference peer still named one")
+	}
+}
+
 func TestFrameColumnsAreDerivedFromTheBytes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -800,6 +838,15 @@ func TestNewValidatesTheRun(t *testing.T) {
 		{"unknown clock mode", func(o *transcript.Options) { o.Run.Clock = "frozen" }},
 		{"no version", func(o *transcript.Options) { o.Run.CharpyVersion = "" }},
 		{"no clock", func(o *transcript.Options) { o.Sched = nil }},
+		{"peer with no version", func(o *transcript.Options) {
+			o.Run.Peer = &transcript.Peer{Module: "example.com/sdk"}
+		}},
+		{"peer with no module", func(o *transcript.Options) {
+			o.Run.Peer = &transcript.Peer{Version: "v1.0.0"}
+		}},
+		{"peer in an era charpy does not know", func(o *transcript.Options) {
+			o.Run.Peer = &transcript.Peer{Module: "example.com/sdk", Version: "v1.0.0", Era: "2027-01-01"}
+		}},
 	}
 
 	for _, tc := range tests {

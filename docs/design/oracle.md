@@ -42,7 +42,7 @@ Plus three non-verdicts that must not be confused with passing:
 
 | | Meaning |
 |---|---|
-| `SKIPPED` | The case does not apply — wrong revision, wrong subject class, or degraded correlation. Carries a reason. |
+| `SKIPPED` | The case does not apply — wrong revision, wrong subject class, degraded correlation, or no reference peer that can speak the revision (`draft`, per ADR-011). Carries a reason. |
 | `INCONCLUSIVE` | The case applied but the transcript cannot support a conclusion: truncated capture, subject died first, join confidence too low. |
 | `UNTRIGGERED` | The case applied and the run completed, but no frame ever matched, so the fault was never injected. The normal outcome for a relayed-stimulus run (`interposer.md` §5.1) whose traffic never went where the matcher points; under owned stimulus it usually indicates a scenario bug. |
 

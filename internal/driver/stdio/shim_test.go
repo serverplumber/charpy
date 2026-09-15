@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/stdio"
 	"github.com/serverplumber/charpy/internal/interpose"
@@ -24,11 +26,37 @@ import (
 // a test.
 const subjectEnv = "CHARPY_TEST_SUBJECT"
 
+// sdkSubjectEnv selects a real SDK server instead of the hand-rolled fixture.
+// The scripted driver connects charpy's own SDK peer, and a peer completes a
+// handshake only against something that actually implements one -- so the
+// scripted tests need a conforming subject rather than a frame echo.
+const sdkSubjectEnv = "CHARPY_TEST_SDK_SUBJECT"
+
 func TestMain(m *testing.M) {
-	if os.Getenv(subjectEnv) == "" {
+	switch {
+	case os.Getenv(sdkSubjectEnv) != "":
+		os.Exit(sdkSubject())
+	case os.Getenv(subjectEnv) != "":
+		os.Exit(subject())
+	default:
 		os.Exit(m.Run())
 	}
-	os.Exit(subject())
+}
+
+// sdkSubject is a conforming MCP server over stdio, built on the same SDK as
+// the reference peer. charpy assumes its subject already passes conformance
+// (README), so anything the run provokes here is charpy's doing.
+func sdkSubject() int {
+	srv := mcp.NewServer(&mcp.Implementation{Name: "fixture", Title: "fixture"}, nil)
+	mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "echoes"},
+		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
+		})
+	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+		fmt.Fprintf(os.Stderr, "sdk subject: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 // subject is a minimal MCP-shaped server: it answers initialize with a

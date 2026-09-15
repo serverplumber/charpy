@@ -75,6 +75,12 @@ type countKey struct {
 type connState struct {
 	inflight map[string]Exchange
 	resolved *cache.Cache[string, Exchange]
+	// last is the id most recently resolved on this connection, for
+	// unsolicited_response's already_resolved source. A window would do, but
+	// the mechanism wants "an id resolved earlier" and the most recent one is
+	// the least stale answer to that.
+	last     envelope.ID
+	haveLast bool
 	// lie is the case whose fault the next frames on this connection are
 	// downstream of, if any. See BeginConsequences.
 	lie   Case
@@ -179,6 +185,7 @@ func (l *Ledger) Resolve(face transcript.Face, conn string, wire envelope.ID) (E
 	if e, ok := cs.inflight[key]; ok {
 		delete(cs.inflight, key)
 		cs.resolved.Put(key, e)
+		cs.last, cs.haveLast = wire, true
 		return e, true
 	}
 	return cs.resolved.Get(key)
@@ -204,6 +211,18 @@ func (l *Ledger) MethodFor(face transcript.Face, conn string, wire envelope.ID) 
 		return e.Method, true
 	}
 	return "", false
+}
+
+// LatestResolved returns the id most recently resolved on a connection, for a
+// fault that needs "an id resolved earlier" (unsolicited_response's
+// already_resolved). Absent when nothing has resolved yet, which makes that
+// case not apply rather than wrong. Callers read it before resolving the
+// current frame, so it names a prior id and not the one in hand.
+func (l *Ledger) LatestResolved(face transcript.Face, conn string) (envelope.ID, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cs := l.connLocked(face, conn)
+	return cs.last, cs.haveLast
 }
 
 // InFlight reports how many requests are outstanding on a connection.

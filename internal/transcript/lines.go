@@ -64,6 +64,7 @@ type HeaderLine struct {
 	Seed          string        `json:"seed"`
 	Mode          Mode          `json:"mode"`
 	Subject       SubjectLine   `json:"subject"`
+	Peer          *PeerLine     `json:"peer,omitempty"`
 	Revision      *RevisionLine `json:"revision,omitempty"`
 	PolicyDigest  string        `json:"policy_digest,omitempty"`
 	Cases         []string      `json:"cases,omitempty"`
@@ -75,6 +76,12 @@ type HeaderLine struct {
 type SubjectLine struct {
 	Class      Class  `json:"class"`
 	Descriptor string `json:"descriptor,omitempty"`
+}
+
+type PeerLine struct {
+	Module  string            `json:"module"`
+	Version string            `json:"version"`
+	Era     revision.Revision `json:"era,omitempty"`
 }
 
 type RevisionLine struct {
@@ -185,6 +192,9 @@ func (w *Writer) headerBytes(h Header) []byte {
 		Redaction:     redactionLabel(w.redactor.On()),
 		Clock:         string(w.run.Clock),
 		Fleet:         FleetLine{Clients: w.run.Clients},
+	}
+	if p := w.run.Peer; p != nil {
+		l.Peer = &PeerLine{Module: p.Module, Version: p.Version, Era: p.Era}
 	}
 	if h.Revision != nil {
 		l.Revision = &RevisionLine{

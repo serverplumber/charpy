@@ -28,17 +28,35 @@ actions on the wire (deliver, rewrite, withhold, close, inject), transcript line
 objects correlation is computed from. It **originates nothing** and is indifferent to where a
 frame came from. Sending traffic is external to the interposer — but not to charpy; see §5.
 
-**One peer, not two.** The reference peer is the official Go SDK, always correct, never coerced
-into misbehaving. It plugs into the interposer as its `Transport`: charpy man-in-the-middles its
-own SDK. The SDK emits a correct frame; the interposer owns the socket and decides what the wire
-sees. Hostility lives entirely in the interposition. What remains of the "feral peer" is not a
-peer: a wire layer that can stop mid-byte (`internal/wire`) and a handful of `json.RawMessage`
-frame templates for synthesis (§2, verb 3).
+**One peer, not two.** The reference peer is `github.com/modelcontextprotocol/go-sdk`, pinned in
+ADR-011, always correct, never coerced into misbehaving. charpy man-in-the-middles its own SDK: the
+SDK emits a correct frame; the interposer owns the socket and decides what the wire sees. Hostility
+lives entirely in the interposition. What remains of the "feral peer" is not a peer: a wire layer
+that can stop mid-byte (`internal/wire`) and a handful of `json.RawMessage` frame templates for
+synthesis (§2, verb 3).
 
-**The reference peer's era is a constructor parameter.** A case that needs a coherent 2026-07-28
-peer gets one by instantiating the SDK in its stateless configuration, not by translating a
-sessioned conversation on the fly. Coherence comes from configuration; incoherence comes from
-corruption; nothing comes from translation (§4).
+**It attaches below `Transport`, at the SDK's byte layer.** `mcp.Transport` hands over a
+`Connection` that reads and writes `jsonrpc.Message` — already parsed — and everything here is
+`envelope.Message`, which carries the bytes the wire actually saw. Re-encoding a typed message
+would fill the ledger's intent column with bytes charpy authored rather than bytes the SDK
+authored, and §6's content join would then digest charpy's encoding of the SDK's frame instead of
+the frame. So there are two seams, and both are byte seams: `mcp.IOTransport` over an `io.Pipe`
+pair where the traffic is stdio-shaped, and `mcp.StreamableClientTransport` with a charpy
+`http.RoundTripper` where it is HTTP. `envelope` and `wire` stay the only parsers charpy owns.
+
+**The reference peer's era is a constructor parameter** —
+`mcp.ClientSessionOptions.ProtocolVersion` for a client peer,
+`mcp.ServerOptions.SupportedProtocolVersions` for a server one. A case that needs a coherent
+2026-07-28 peer gets one by instantiating the SDK in its stateless configuration, not by
+translating a sessioned conversation on the fly. Coherence comes from configuration; incoherence
+comes from corruption; nothing comes from translation (§4). Both options are exported only as of
+v1.8.0-pre.2; ADR-011 records what the alternative cost, which was an undeclared capability fault
+on every legacy-era run.
+
+**The peer speaks the five dated revisions and not `draft`.** `revisions.md` §1 sorts draft last so
+every open-ended `applies_to` picks it up, which means a draft-only case has no peer to carry it
+under owned stimulus. That is a `SKIPPED` with a reason, never an `UNTRIGGERED`
+(`oracle.md` §2). `internal/peer` fails the build when the two revision lists drift apart.
 
 ---
 
@@ -154,16 +172,36 @@ run modes actually differ in:
 | Hostile server (client under test) | — | Reference peer as server, reconfigurable between connections |
 | Gateway under test | Scenario player | Reference peer as server(s) |
 
-The **scenario player** is the reference SDK driven by a seeded script. It exists because the
-properties that distinguish charpy from a chaos proxy all require owned stimulus: case identity
-reproduces from ID + seed only if the seed drives the traffic; the liveness probe must fire at
-the `fault_withdrawn` instant; the cross-SDK differential needs the same scripted scenario on the
-same wire three times. A pure man-in-the-middle with external traffic is Toxiproxy — useful, and
-not this project.
+The **scenario player** (`internal/scenario`) is the reference peer driven by a script. It exists
+because the properties that distinguish charpy from a chaos proxy all require owned stimulus: case
+identity reproduces from ID + seed only if charpy drives the traffic; the liveness probe must fire
+at the `fault_withdrawn` instant; the cross-SDK differential needs the same scripted scenario on
+the same wire three times. A pure man-in-the-middle with external traffic is Toxiproxy — useful,
+and not this project.
 
-The scenario player declares intent to the ledger as it originates ("request 7, `tools/call`,
-argument digest X"). For relayed traffic, intent *is* the original bytes. Same ledger, two ways
-of filling the intent column.
+**One case is armed per run here** (ADR-012), which is a product decision before it is a
+reproducibility one: a transcript carrying every fault at once is a puzzle rather than a finding.
+Relayed runs still arm many, because nothing there controls the traffic anyway.
+
+The script derives its traffic from the compiled case — which method to originate, and how many
+times, read off `[case.match]` — so it cannot drift away from the matcher it feeds. It draws no
+randomness: `seed.Payload` belongs to the synthesis mechanisms and no v0 case asks for jitter, so
+the script is deterministic, which is reproducibility in its strongest form rather than its seeded
+one. A case selecting on a method nothing can originate is refused when the scenario is built,
+because running anyway would report `UNTRIGGERED` and look exactly like a subject that behaved.
+
+A scenario stops for one of three named reasons, never a bare cancellation. A withdrawal is the
+instant the liveness budget starts and the peer should probe; a signal means flush and stop; a
+finished script means nothing went wrong. `context.Canceled` distinguishes none of those, so
+`scenario.Halt` names both ends — the driver calls `Withdrawn()`, the script asks `Why(ctx)`.
+
+The intent column is filled from the bytes in both modes, not by a declaration. An earlier draft
+had the player announce each origination to the ledger ("request 7, `tools/call`, argument digest
+X"); it does not need to. The interposer already sees every outbound frame, and §6 puts digest
+canonicalisation in the ledger, so a declaration would be the player restating what the next
+component is about to read. What the player actually contributes is narrower and cannot be got any
+other way: it *chose the bytes*, so it can make each origination distinct inside values a tool's
+schema accepts. Same ledger, one way of filling the intent column, two sources of bytes.
 
 ### 5.1 Relaying traffic charpy does not originate
 

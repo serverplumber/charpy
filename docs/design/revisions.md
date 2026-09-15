@@ -30,6 +30,14 @@ support and fingerprinting ship in v0 so nothing rots; its distinctive case fami
 therefore include `draft`, which is intentional: charpy should break loudly when the draft moves, not
 silently stop testing it.
 
+**Nothing speaks `draft` on charpy's own side.** The reference peer (ADR-011) tracks the five dated
+revisions and no more, so a case that resolves to draft alone has no peer to carry it under owned
+stimulus. That outcome is `SKIPPED` with the reason, not `UNTRIGGERED`: the fault did not fail to
+match, it never had a peer. Relayed stimulus is unaffected — the traffic is somebody else's and
+charpy only observes it. `internal/peer` asserts the two revision lists agree, in both directions,
+so the day the SDK adds a revision charpy has not vendored is the day the build fails rather than
+the day the coverage quietly narrows (§7).
+
 ---
 
 ## 2. Schema vendoring

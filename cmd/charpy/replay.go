@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/serverplumber/charpy/internal/oracle"
+	"github.com/serverplumber/charpy/internal/oracle/coverage"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
 	"github.com/serverplumber/charpy/internal/oracle/schemacheck"
 	"github.com/serverplumber/charpy/internal/report"
@@ -26,7 +27,7 @@ func cmdReplay(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	format := fs.String("format", "text", "text, jsonl or junit")
-	only := fs.String("oracle", "", "run one layer: schema or invariant")
+	only := fs.String("oracle", "", "run one layer: schema, invariant or coverage")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy replay [flags] <transcript.jsonl>\n\n")
 		fs.PrintDefaults()
@@ -98,9 +99,12 @@ func judge(t *transcript.Transcript, only string) (oracle.Report, int) {
 	if only == "" || only == invariant.Layer {
 		rep.Findings = append(rep.Findings, invariant.Check(t).Findings...)
 	}
-	if only != "" && only != schemacheck.Layer && only != invariant.Layer {
+	if only == "" || only == coverage.Layer {
+		rep.Findings = append(rep.Findings, coverage.Check(t).Findings...)
+	}
+	if only != "" && only != schemacheck.Layer && only != invariant.Layer && only != coverage.Layer {
 		fmt.Fprintf(os.Stderr, "charpy replay: unknown oracle %q; v0 has %s and %s\n",
-			only, schemacheck.Layer, invariant.Layer)
+			only, schemacheck.Layer, invariant.Layer+", "+coverage.Layer)
 		return rep, exitHarness
 	}
 
@@ -150,6 +154,12 @@ func details(f oracle.Finding) []string {
 	var out []string
 	if f.Summary != "" {
 		out = append(out, f.Summary)
+	}
+	// The citation is what someone retypes into a bug report, and for a
+	// finding with no sequence number to point at it is the only thing
+	// identifying which case this is about.
+	if f.Citation != "" {
+		out = append(out, "case: "+f.Citation)
 	}
 	for _, line := range strings.Split(f.Detail, "\n") {
 		if line = strings.TrimSpace(line); line != "" {

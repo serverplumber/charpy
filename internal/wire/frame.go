@@ -52,6 +52,37 @@ type Encoded struct {
 // Len is the number of bytes a complete write would put on the wire.
 func (e Encoded) Len() int { return len(e.Bytes) }
 
+// Body is the payload a frame carries: the whole line on stdio, the data:
+// value on an SSE event, the text of a comment. Empty when there is none --
+// an SSE event with no data field. It is how a relay recovers the JSON-RPC
+// frame from a unit a scanner measured.
+func (e Encoded) Body() []byte {
+	if e.body.len() <= 0 {
+		return nil
+	}
+	return e.Bytes[e.body.start:e.body.end]
+}
+
+// IsComment reports whether this unit is an SSE keep-alive comment rather than
+// an event, which is what tells a relay it carries no frame to observe.
+func (e Encoded) IsComment() bool { return e.kind == kindComment }
+
+// BodySent returns the portion of the payload delivered by a cut at n bytes:
+// the whole body when n covers it, the truncated remnant when the cut lands
+// inside it, and nothing when the cut falls before the body begins. It is what
+// a relay records as the frame that crossed after a truncation -- which will
+// not parse, and is exactly what the transcript's malformed kind carries.
+func (e Encoded) BodySent(n int) []byte {
+	if e.body.len() <= 0 || n <= e.body.start {
+		return nil
+	}
+	end := e.body.end
+	if n < end {
+		end = n
+	}
+	return e.Bytes[e.body.start:end]
+}
+
 // EncodeLine frames a JSON-RPC frame for stdio: the bytes, then a newline.
 //
 // The frame is not validated or re-serialised. It goes out exactly as given,

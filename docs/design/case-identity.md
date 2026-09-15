@@ -196,12 +196,21 @@ target when the matcher permits several, generated payload content, and jitter w
 scheduling. `charpy run --case X --revision R --seed S` reproduces the same *injected* behaviour
 byte for byte.
 
-### How the seed reaches a case
+### What the promise depends on
 
-The promise above is only true if a case's randomness depends on the case, and not on what ran
-before it. A single run-level generator drawn from in sequence would make case X's bytes a function
-of which cases preceded it, so `charpy run --case X --seed S` would reproduce X only when X ran
-first — which is the promise being false rather than qualified.
+The promise has two ways of being false, and both are repaired rather than qualified.
+
+**The traffic must not depend on what else was armed.** Under owned stimulus a fault changes what
+the peer does next — `truncate` with `then = "close"` ends the stream, so a call another case was
+waiting for never happens — so two cases armed against one session each see traffic the other
+shaped. ADR-012 arms one case per run for a better reason than this one, and this falls out of it:
+with nothing else armed, there is nothing else for the traffic to depend on. Relayed runs arm many
+cases at once and make no occurrence-reproducibility claim at all (`interposer.md` §5.1).
+
+**The randomness must depend on the case, and not on what ran before it.** A single run-level
+generator drawn from in sequence would make case X's bytes a function of which cases preceded it,
+so `charpy run --case X --seed S` would reproduce X only when X ran first — which is the promise
+being false rather than qualified.
 
 So each draw comes from its own stream, seeded by domain separation:
 

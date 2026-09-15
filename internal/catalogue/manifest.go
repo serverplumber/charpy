@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
@@ -62,6 +63,27 @@ func (c Case) AppliesToRange() revision.Range { return c.parsedRange }
 // Withdrawn reports whether the case has been retired. Withdrawn cases still
 // parse, so old transcripts and old reports keep resolving.
 func (c Case) Withdrawn() bool { return c.Status == "withdrawn" }
+
+// SupportsTransport reports whether a case can run on a transport. An empty
+// transport list means any, matching the manifest default where an omitted
+// transport constrains nothing.
+func (c Case) SupportsTransport(t string) bool {
+	if len(c.Transport) == 0 {
+		return true
+	}
+	return slices.Contains(c.Transport, t)
+}
+
+// SupportsSubject reports whether a case applies to a subject class. An empty
+// subject list means any. Like transport, it is applicability: a server-only
+// case armed on a client-subject run would match frames and test the wrong
+// side, so it is dropped at selection rather than carried in.
+func (c Case) SupportsSubject(class string) bool {
+	if len(c.Subject) == 0 {
+		return true
+	}
+	return slices.Contains(c.Subject, Subject(class))
+}
 
 // Manifest is the top-level shape of a case file. It is exported because it
 // is also how a catalogue is rendered back out: `charpy cases` prints TOML,
