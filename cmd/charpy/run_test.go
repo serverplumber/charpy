@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -175,6 +176,108 @@ func TestRunRefusesACaseGlobThatMatchesNothing(t *testing.T) {
 	}
 	if len(transcripts(t, dir)) != 0 {
 		t.Error("a selection that matched nothing still wrote a transcript")
+	}
+}
+
+// A seed is checked when the flag is read, not when the first transcript is
+// opened: by then the run has been announced, the seed is in every citation,
+// and an empty transcript is already on disk.
+func TestRunRefusesAMalformedSeed(t *testing.T) {
+	for _, s := range []string{"1", "8f2c1", "8F2C1A", "8f2c1g", "8f2c1a8f2c1a8f2c1"} {
+		t.Run(s, func(t *testing.T) {
+			out, dir, code := runCLI(t, "--case", "id/duplicate-response",
+				"--revision", "2025-11-25", "--seed", s)
+			if code != exitHarness {
+				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
+			}
+			if !strings.Contains(out, "seed") {
+				t.Errorf("the refusal does not name the seed:\n%s", out)
+			}
+			if n := len(transcripts(t, dir)); n != 0 {
+				t.Errorf("a malformed seed still wrote %d transcripts", n)
+			}
+		})
+	}
+}
+
+// Which tool a script calls is the subject's registration order unless the run
+// says otherwise, which is fine against a fixture and not against a subject
+// whose first tool does something.
+func TestRunPinsTheToolAndItsArguments(t *testing.T) {
+	out, dir, code := runCLI(t, "--case", "id/duplicate-response", "--revision", "2025-11-25",
+		"--seed", "8f2c1a", "--tool", "nosuch", "--args", `{"x":1}`)
+	if code != exitClean {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+
+	files := transcripts(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("wrote %d transcripts, want 1\n%s", len(files), out)
+	}
+	frames := rawFrames(t, files[0])
+	// The fixture lists echo, so a call naming anything else can only have
+	// come from --tool rather than from tools/list.
+	if !strings.Contains(frames, `"name":"nosuch"`) {
+		t.Errorf("--tool was not honoured; the script called the listed tool:\n%s", out)
+	}
+	if !strings.Contains(frames, `"x":1`) {
+		t.Errorf("--args did not reach the call:\n%s", out)
+	}
+}
+
+// rawFrames returns every frame body in a transcript, decoded. Raw bytes are
+// carried base64 so a frame the subject wrote survives the transcript exactly.
+func rawFrames(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var frames strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var l struct {
+			Raw string `json:"raw"`
+		}
+		if err := json.Unmarshal([]byte(line), &l); err != nil || l.Raw == "" {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(l.Raw)
+		if err != nil {
+			t.Fatalf("%s: raw is not base64: %v", path, err)
+		}
+		frames.Write(raw)
+		frames.WriteByte('\n')
+	}
+	return frames.String()
+}
+
+// Arguments that are not a JSON object are refused before the subject is
+// spawned, for the same reason a malformed seed is.
+func TestRunRefusesMalformedToolArguments(t *testing.T) {
+	for _, args := range []string{"{", `["x"]`, "3"} {
+		t.Run(args, func(t *testing.T) {
+			out, dir, code := runCLI(t, "--case", "id/duplicate-response",
+				"--revision", "2025-11-25", "--tool", "echo", "--args", args)
+			if code != exitHarness {
+				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
+			}
+			if n := len(transcripts(t, dir)); n != 0 {
+				t.Errorf("malformed --args still wrote %d transcripts", n)
+			}
+		})
+	}
+}
+
+// --tool and --args say what charpy originates, which only a scripted run
+// does: under a relay the client under test chooses its own traffic.
+func TestRunRefusesToolWithoutACase(t *testing.T) {
+	out, _, code := runCLI(t, "--tool", "echo")
+	if code != exitHarness {
+		t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
+	}
+	if !strings.Contains(out, "--case") {
+		t.Errorf("the refusal does not say what is missing:\n%s", out)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/seed"
 )
 
 // Family is the first segment of a case ID. The list is fixed: family names
@@ -89,15 +90,15 @@ type Citation struct {
 // ParseCitation parses a full or partial citation. Revision and seed are both
 // optional, so ParseCitation also accepts a bare ID.
 func ParseCitation(s string) (Citation, error) {
-	rest, seed, hasSeed := strings.Cut(s, "#")
+	rest, frag, hasSeed := strings.Cut(s, "#")
 	c := Citation{}
 
 	if hasSeed {
-		v, ok := strings.CutPrefix(seed, "seed=")
+		v, ok := strings.CutPrefix(frag, "seed=")
 		if !ok {
 			return Citation{}, fmt.Errorf("citation %q: fragment must be seed=<hex>", s)
 		}
-		if !isSeed(v) {
+		if !seed.Valid(v) {
 			return Citation{}, fmt.Errorf("citation %q: seed %q must be 6-16 lowercase hex digits", s, v)
 		}
 		c.Seed = v
@@ -160,18 +161,6 @@ func isKebab(s string) bool {
 			}
 			prevDash = true
 		default:
-			return false
-		}
-	}
-	return true
-}
-
-func isSeed(s string) bool {
-	if len(s) < 6 || len(s) > 16 {
-		return false
-	}
-	for _, r := range s {
-		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
 			return false
 		}
 	}

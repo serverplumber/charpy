@@ -28,6 +28,9 @@ type ScriptOptions struct {
 	Era revision.Revision
 	// Scenario overrides the derived script. Nil derives it from the case.
 	Scenario scenario.Scenario
+	// Stimulus shapes the derived script: which tool it calls and with what
+	// arguments. Zero takes the first tool the subject lists.
+	Stimulus scenario.Options
 	// Timeout bounds the script. Zero takes DefaultTimeout.
 	Timeout time.Duration
 	// Listen is the address charpy's ingress binds. Empty takes an ephemeral
@@ -66,7 +69,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 
 	run := o.Scenario
 	if run == nil {
-		run, err = scenario.Basic(o.Case.Match, scenario.Options{})
+		run, err = scenario.Basic(o.Case.Match, o.Stimulus)
 		if err != nil {
 			return nil, err
 		}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/seed"
 )
 
 // RawCap is how many bytes of a frame the transcript carries. Beyond it the
@@ -30,8 +30,6 @@ const wallFormat = "2006-01-02T15:04:05.000000000Z07:00"
 // -- so reaching this cap means the run never wrote one, and the writer
 // supplies its own rather than growing until it dies.
 const HeldCap = 1 << 16
-
-var seedPattern = regexp.MustCompile(`^[0-9a-f]{6,16}$`)
 
 // Run is the half of the header known before the first frame: what charpy is,
 // what it is pointed at, and how it will keep time.
@@ -301,7 +299,7 @@ func New(w io.Writer, opts Options) (*Writer, error) {
 }
 
 func validateRun(r *Run) error {
-	if !seedPattern.MatchString(r.Seed) {
+	if !seed.Valid(r.Seed) {
 		return fmt.Errorf("transcript: seed %q must be 6 to 16 lowercase hex digits", r.Seed)
 	}
 	switch r.Mode {

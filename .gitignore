@@ -1,6 +1,21 @@
 /charpy
 /dist/
 /charpy-out/
+/examples/bin/
+/examples/out/
 *.jsonl.gz
 
 .direnv/
+
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+*.coverprofile
+coverage.*
+go.work
+go.work.sum

@@ -10,6 +10,7 @@ import (
 
 	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/seed"
 )
 
 // These mirror the patterns in schema/transcript/v1.json. They are duplicated
@@ -20,7 +21,7 @@ import (
 // together.
 var (
 	caseIDPattern   = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*$`)
-	citationPattern = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*(@([0-9]{4}-[0-9]{2}-[0-9]{2}|draft))?(#seed=[0-9a-f]{6,16})?$`)
+	citationPattern = regexp.MustCompile(`^[a-z0-9]+/[a-z0-9]+(-[a-z0-9]+)*(@([0-9]{4}-[0-9]{2}-[0-9]{2}|draft))?(#seed=` + seed.Pattern + `)?$`)
 	traceIDPattern  = regexp.MustCompile(`^[0-9a-f]{32}$`)
 	spanIDPattern   = regexp.MustCompile(`^[0-9a-f]{16}$`)
 )

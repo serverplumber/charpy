@@ -3,6 +3,9 @@
 # Usage: just check
 set shell := ["bash", "-eo", "pipefail", "-c"]
 
+# Runnable invocations, one per mode charpy supports.
+import 'examples/demo.just'
+
 # -----------------------------
 # Config
 # -----------------------------

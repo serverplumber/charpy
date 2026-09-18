@@ -9,6 +9,7 @@ package seed
 import (
 	"crypto/sha256"
 	"math/rand/v2"
+	"regexp"
 )
 
 // Purposes. Each names an independent stream within a case.
@@ -67,4 +68,15 @@ func Pick(r *rand.Rand) func(n int) int {
 		}
 		return r.IntN(n)
 	}
+}
+
+// Pattern is a run seed's format unanchored so a larger pattern can
+// incorporate it.
+const Pattern = `[0-9a-f]{6,16}`
+
+var valid = regexp.MustCompile(`^` + Pattern + `$`)
+
+// Valid reports whether a string is a valid seed.
+func Valid(s string) bool {
+	return valid.MatchString(s)
 }

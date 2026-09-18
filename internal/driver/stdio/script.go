@@ -31,6 +31,12 @@ type ScriptOptions struct {
 	// the normal path and the one that cannot drift from the matcher.
 	Scenario scenario.Scenario
 
+	// Stimulus shapes the derived script: which tool it calls and with what
+	// arguments. Zero takes the first tool the subject lists, which is what a
+	// catalogue case means by "a tools/call" -- fine against a fixture, and
+	// not against a subject whose first tool does something.
+	Stimulus scenario.Options
+
 	// Timeout bounds the script. Zero takes DefaultTimeout.
 	//
 	// It is not belt and braces. A fault that kills the subject's parser
@@ -88,7 +94,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 
 	run := o.Scenario
 	if run == nil {
-		run, err = scenario.Basic(o.Case.Match, scenario.Options{})
+		run, err = scenario.Basic(o.Case.Match, o.Stimulus)
 		if err != nil {
 			return nil, err
 		}

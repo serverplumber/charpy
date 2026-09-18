@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +25,8 @@ import (
 	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/scenario"
+	"github.com/serverplumber/charpy/internal/seed"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -57,6 +60,8 @@ func cmdRun(args []string, _ io.Writer) int {
 	subjectURL := fs.String("subject-url", "", "an HTTP subject already running at this URL; charpy proxies it (requires --case)")
 	hostileMode := fs.Bool("hostile", false, "serve as a hostile server for a client under test that spawned charpy over stdio; --case filters which cases arm")
 	hostileHTTP := fs.String("hostile-http", "", "serve hostile over HTTP at this address instead of stdio (e.g. :8080); the client under test connects here")
+	tool := fs.String("tool", "", "tool the script calls; empty takes the first the subject lists")
+	toolArgs := fs.String("args", "", "JSON object of arguments passed to every --tool call; empty sends none")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy run [flags] -- <subject command>\n"+
 			"       charpy run --subject-url <url> --case <glob> --revision <rev> [flags]\n\n"+
@@ -73,6 +78,11 @@ func cmdRun(args []string, _ io.Writer) int {
 
 	command := fs.Args()
 
+	stim, code := stimulus(*tool, *toolArgs, *caseGlob, *hostileMode || *hostileHTTP != "")
+	if code != exitClean {
+		return code
+	}
+
 	if *subjectURL != "" {
 		if len(command) != 0 {
 			fmt.Fprint(os.Stderr, "charpy run: --subject-url proxies a running server; do not also pass a subject command.\n")
@@ -82,6 +92,7 @@ func cmdRun(args []string, _ io.Writer) int {
 		if code != exitClean {
 			return code
 		}
+		cfg.stim = stim
 		return httpScripted(*subjectURL, cfg, *caseGlob, *outDir, *noRedact, out)
 	}
 
@@ -113,6 +124,7 @@ func cmdRun(args []string, _ io.Writer) int {
 	if code != exitClean {
 		return code
 	}
+	cfg.stim = stim
 
 	if *caseGlob != "" {
 		return scripted(command, cfg, *caseGlob, *outDir, *noRedact, out)
@@ -161,12 +173,46 @@ type config struct {
 	class    transcript.Class
 	face     transcript.Face
 	cases    []interpose.Case
+
+	// stim shapes what the script originates. Zero calls the first tool the
+	// subject lists, with no arguments.
+	stim scenario.Options
+}
+
+// stimulus reads the two flags that say what charpy originates.
+//
+// Both are owned stimulus only. Under a relay the client under test chooses
+// its own traffic, so a tool named there would be quietly ignored, and a flag
+// that does nothing is worse than one that is refused.
+func stimulus(tool, args, glob string, relay bool) (scenario.Options, int) {
+	if tool == "" && args == "" {
+		return scenario.Options{}, exitClean
+	}
+	if glob == "" || relay {
+		fmt.Fprint(os.Stderr, "charpy run: --tool and --args say what charpy originates, so they need --case.\n"+
+			"Under a relay the client under test chooses its own traffic.\n")
+		return scenario.Options{}, exitHarness
+	}
+
+	o := scenario.Options{Tool: tool}
+	if args != "" {
+		if err := json.Unmarshal([]byte(args), &o.Arguments); err != nil {
+			fmt.Fprintf(os.Stderr, "charpy run: --args must be a JSON object: %v\n", err)
+			return scenario.Options{}, exitHarness
+		}
+	}
+	return o, exitClean
 }
 
 func runConfig(rev, seedFlag, class, transport string) (config, int) {
 	cfg := config{seed: seedFlag}
 	if cfg.seed == "" {
 		cfg.seed = newSeed()
+	} else {
+		if !seed.Valid(cfg.seed) {
+			fmt.Fprintf(os.Stderr, "charpy run: --seed %q must be 6 to 16 lowercase hex digits\n", cfg.seed)
+			return config{}, exitHarness
+		}
 	}
 
 	switch transcript.Class(class) {
@@ -453,8 +499,9 @@ func scriptOne(ctx context.Context, command []string, cfg config, c interpose.Ca
 
 	sched := clock.RealSched()
 	sc, err := stdio.NewScript(stdio.ScriptOptions{
-		Case: c,
-		Era:  cfg.revision,
+		Case:     c,
+		Era:      cfg.revision,
+		Stimulus: cfg.stim,
 		Options: stdio.Options{
 			Command:    command,
 			Env:        os.Environ(),
@@ -562,8 +609,9 @@ func httpScriptOne(ctx context.Context, url string, cfg config, c interpose.Case
 
 	sched := clock.RealSched()
 	sc, err := proxy.NewScript(proxy.ScriptOptions{
-		Case: c,
-		Era:  cfg.revision,
+		Case:     c,
+		Era:      cfg.revision,
+		Stimulus: cfg.stim,
 		Options: proxy.Options{
 			SubjectURL: url,
 			Transcript: tr,
