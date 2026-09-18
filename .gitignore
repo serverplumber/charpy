@@ -3,6 +3,7 @@
 /charpy-out/
 /examples/bin/
 /examples/out/
+/examples/src/
 *.jsonl.gz
 
 .direnv/

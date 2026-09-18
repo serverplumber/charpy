@@ -52,13 +52,15 @@ vet:
 
 # Format the code
 fmt:
-    gofmt -l -w .
+    git ls-files '*.go' | xargs gofmt -l -w
 
 # Fail if anything is unformatted, rather than reformatting it
 lint:
     #!/usr/bin/env bash
     set -eo pipefail
-    out=$(gofmt -l .)
+    # Tracked files only: examples/src holds subjects charpy did not write and
+    # does not get to have opinions about.
+    out=$(git ls-files '*.go' | xargs gofmt -l)
     if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
 
 # The determinism guarantee, as a gate rather than an aspiration: replaying one

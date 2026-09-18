@@ -293,6 +293,24 @@ func TestUnsolicitedResponse(t *testing.T) {
 		}
 	})
 
+	// The frame charpy matched on is traffic the subject is waiting to see
+	// answered. Swallowing it makes every subject look like it stopped
+	// answering, which is a finding charpy would be inventing.
+	t.Run("the matched frame still crosses", func(t *testing.T) {
+		for _, source := range []string{"never_used", "reserved_null"} {
+			p := apply(t, "unsolicited_response", map[string]any{"id_source": source}, parse(t, request))
+			if p.Deliver == nil {
+				t.Fatalf("%s: the matched frame was dropped, not delivered beside the fault", source)
+			}
+			if got := string(p.Deliver.Raw()); got != request {
+				t.Errorf("%s: delivered %s, want the matched frame unchanged", source, got)
+			}
+			if p.Swallow {
+				t.Errorf("%s: the matched frame was swallowed", source)
+			}
+		}
+	})
+
 	t.Run("already_resolved needs one", func(t *testing.T) {
 		_, err := fault.Apply(caseOf("unsolicited_response", map[string]any{"id_source": "already_resolved"}),
 			parse(t, request), fault.Context{RunSeed: runSeed})

@@ -14,9 +14,23 @@
 gocmd       := env("GO", "go")
 ex_bin      := justfile_directory() / "examples/bin"
 ex_out      := justfile_directory() / "examples/out"
+ex_src      := justfile_directory() / "examples/src"
 ex_subject  := "github.com/modelcontextprotocol/go-sdk/conformance/everything-server"
 ex_client   := "github.com/modelcontextprotocol/go-sdk/conformance/everything-client"
 ex_server   := ex_bin / "everything-server"
+
+# A subject charpy does not own, pinned to a release rather than a branch: a
+# finding has to stay reproducible after upstream moves. It is built from
+# source in examples/src, which survives demo-clean because re-cloning it is
+# minutes rather than seconds.
+gh_repo     := "https://github.com/github/github-mcp-server"
+gh_ref      := "v1.12.2"
+gh_src      := ex_src / "github-mcp-server"
+gh_server   := ex_bin / "github-mcp-server"
+
+# A read-only tool, so a call that reaches the API asks it for nothing it can
+# change -- and with no credentials it never reaches the API at all.
+gh_tool     := "get_me"
 
 [doc('Build charpy and the SDK conformance subjects into examples/bin')]
 demo-build: build
@@ -81,6 +95,49 @@ demo-hostile-http: demo-build
     # transcript and the oracle own that judgment, not the client's exit code.
     MCP_CONFORMANCE_SCENARIO=initialize \
         {{ex_bin}}/everything-client http://127.0.0.1:8080/ || true
+
+# Clone and build github/github-mcp-server, a subject nobody here maintains.
+# The only recipe that needs the network; everything else builds from the
+# module cache.
+[doc('Clone and build github-mcp-server at its pinned release')]
+demo-github-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    mkdir -p {{ex_src}} {{ex_bin}}
+    if [ ! -d {{gh_src}}/.git ]; then
+        git clone --depth 1 --branch {{gh_ref}} {{gh_repo}} {{gh_src}}
+    else
+        git -C {{gh_src}} fetch --depth 1 origin tag {{gh_ref}}
+        git -C {{gh_src}} checkout -q {{gh_ref}}
+    fi
+    cd {{gh_src}} && {{gocmd}} build -o {{gh_server}} ./cmd/github-mcp-server
+
+#   charpy run --case '<glob>' --revision <rev> --tool <tool> -- <subject cmd>
+#
+# The same stdio invocation as demo-stdio, pointed at software charpy does not
+# own. Three things make it a subject rather than a hazard: --read-only, a
+# token that is not a credential, and a pinned read-only tool. Every tool call
+# fails at the API boundary, which still produces the response frame a fault
+# needs, so the run tests the server's wire handling and touches nothing.
+#
+# Its CI builds, unit-tests and diffs tool schemas; it runs no conformance
+# suite, and its e2e tests are gated behind a build tag and a live token. So
+# whether it survives a hostile peer is, as far as its CI knows, untested.
+[doc('Run the stdio cases against github-mcp-server, then judge every transcript')]
+demo-github: demo-build demo-github-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rm -rf {{ex_out}}/github
+    mkdir -p {{ex_out}}/github
+    GITHUB_PERSONAL_ACCESS_TOKEN=dummy_not_a_real_token \
+        ./charpy run --case 'id/*' --revision 2025-11-25 --tool {{gh_tool}} \
+            --out {{ex_out}}/github -- {{gh_server}} stdio --read-only
+    status=0
+    for t in {{ex_out}}/github/*.jsonl; do
+        echo "== $t"
+        ./charpy replay "$t" || status=$?
+    done
+    exit $status
 
 #   charpy replay <transcript>
 #

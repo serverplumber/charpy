@@ -261,7 +261,13 @@ func planDuplicateID(p Plan, m envelope.Message, params map[string]any) (Plan, e
 }
 
 // unsolicitedResponse answers an id nothing asked about.
-func planUnsolicitedResponse(p Plan, params map[string]any, ctx Context) (Plan, error) {
+//
+// The matched frame still crosses, and that is the whole case: a late answer
+// for an id already resolved is an *extra* frame beside the traffic, not a
+// substitute for it. Dropping the matched one instead makes every subject look
+// wedged -- it is waiting on an answer charpy ate -- which is a false positive
+// against software charpy does not own, and credibility spends once.
+func planUnsolicitedResponse(p Plan, m envelope.Message, params map[string]any, ctx Context) (Plan, error) {
 	source := str(params, "id_source", "never_used")
 
 	var id envelope.ID
@@ -285,11 +291,12 @@ func planUnsolicitedResponse(p Plan, params map[string]any, ctx Context) (Plan, 
 		return Plan{}, fmt.Errorf("fault: unsolicited_response id_source = %q", source)
 	}
 
-	m, err := envelope.NewResponse(id, json.RawMessage(`{}`))
+	extra, err := envelope.NewResponse(id, json.RawMessage(`{}`))
 	if err != nil {
 		return Plan{}, err
 	}
-	p.Before = []envelope.Message{m}
+	p.Before = []envelope.Message{extra}
+	p.Deliver = &m
 	return p, nil
 }
 

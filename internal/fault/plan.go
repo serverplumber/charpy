@@ -127,24 +127,48 @@ func Apply(c interpose.Case, m envelope.Message, ctx Context) (Plan, error) {
 
 	switch c.Fault.Kind {
 	case "hang":
-		return planHang(p, params)
+		return planned(planHang(p, params))
 	case "truncate":
-		return planTruncate(p, m, params, ctx)
+		return planned(planTruncate(p, m, params, ctx))
 	case "malformed_json":
-		return planMalformedJSON(p, m, params, ctx)
+		return planned(planMalformedJSON(p, m, params, ctx))
 	case "schema_violation":
-		return planSchemaViolation(p, m, params)
+		return planned(planSchemaViolation(p, m, params))
 	case "duplicate_id":
-		return planDuplicateID(p, m, params)
+		return planned(planDuplicateID(p, m, params))
 	case "unsolicited_response":
-		return planUnsolicitedResponse(p, params, ctx)
+		return planned(planUnsolicitedResponse(p, m, params, ctx))
 	case "manifest_mutate":
-		return planManifestMutate(p, m, params)
+		return planned(planManifestMutate(p, m, params))
 	case "capability_flip":
-		return planCapabilityFlip(p, m, params)
+		return planned(planCapabilityFlip(p, m, params))
 	default:
 		return Plan{}, fmt.Errorf("fault: no mechanism implements kind %q", c.Fault.Kind)
 	}
+}
+
+// planned refuses a plan that never says what becomes of the matched frame.
+//
+// Deliver, Hold and Swallow are the three answers, and a plan carrying none of
+// them drops the frame in every driver: the switch that carries a plan out has
+// an arm for each, so a plan matching no arm means the frame quietly does not
+// cross, with nothing in the transcript saying charpy is why. That is the
+// worst kind of wrong for this tool, because the subject then looks like it
+// stopped answering.
+//
+// Like the unknown-kind branch above, this is charpy being inconsistent with
+// itself rather than a case that does not apply, so it is an error and not
+// ErrNotApplicable.
+func planned(p Plan, err error) (Plan, error) {
+	if err != nil {
+		return Plan{}, err
+	}
+	if p.Deliver == nil && p.Hold == nil && !p.Swallow {
+		return Plan{}, fmt.Errorf(
+			"fault: mechanism %q planned neither a delivery, a hold nor a swallow for the matched frame",
+			p.Case.Fault.Kind)
+	}
+	return p, nil
 }
 
 // Parameter readers. The loader has already validated these against the
