@@ -41,6 +41,12 @@ func Check(t *transcript.Transcript) oracle.Report {
 type exchange struct {
 	requested []*transcript.FrameLine
 	answered  []*transcript.FrameLine
+
+	// replaced counts the answers charpy rewrote into something carrying a
+	// different id, or none. They are not answers to this id on the wire and
+	// they are not the subject's failure to send one either, which is the
+	// distinction the fault's `replaced` attribution exists to record.
+	replaced []*transcript.FrameLine
 }
 
 type connKey struct {
@@ -74,6 +80,19 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 		if f.Face != key.face || deref(f.ConnID) != key.conn {
 			continue
 		}
+		// A frame charpy rewrote away still answers the id it used to carry,
+		// which the fault attribution names. Filed under that id rather than
+		// under whatever the replacement parses to -- usually nothing.
+		if r := replacedKey(f); r != "" {
+			e, ok := exchanges[r]
+			if !ok {
+				e = &exchange{}
+				exchanges[r] = e
+				order = append(order, r)
+			}
+			e.replaced = append(e.replaced, f)
+		}
+
 		id := f.Key()
 		if id == "" {
 			// A notification or a frame with no envelope resolves nothing and
@@ -99,7 +118,7 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 
 	for _, id := range order {
 		e := exchanges[id]
-		idResolvesOnce(rep, id, e, died, diedAt)
+		idResolvesOnce(rep, class, id, e, died, diedAt)
 		noUnsolicitedResponse(rep, class, id, e)
 		noDuplicateInflightID(rep, id, e)
 	}
@@ -107,25 +126,52 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 
 // I1: every request id resolves exactly once -- result or error, never both,
 // never neither.
-func idResolvesOnce(rep *oracle.Report, id string, e *exchange, died bool, diedAt int64) {
+func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *exchange, died bool, diedAt int64) {
 	if len(e.requested) == 0 {
 		return // not a request; I2 is what covers an answer to nothing
 	}
 
+	// "More than once" is a claim about the subject, so it counts only the
+	// answers the subject wrote. A duplicate charpy injected is charpy's --
+	// reporting it would be quoting our own fault back as evidence, which I2
+	// already refuses to do, and it is the verdict that would be pasted into
+	// somebody else's issue tracker.
+	//
+	// The "never" arm below counts every answer instead, including charpy's:
+	// there the question is whether an answer crossed at all, and a frame
+	// charpy rewrote is still the subject's answer arriving.
+	own := ownAnswers(class, e)
+
 	switch {
-	case len(e.answered) > 1:
+	case len(own) > 1:
 		rep.Add(oracle.Finding{
 			Verdict: oracle.Observed, Layer: Layer, Check: "id-resolves-once",
-			Seq:     e.answered[1].Seq,
-			Summary: fmt.Sprintf("id %s was answered %d times", id, len(e.answered)),
-			Detail:  fmt.Sprintf("requested at seq %d, answered at %s", e.requested[0].Seq, seqs(e.answered)),
+			Seq:     own[1].Seq,
+			Summary: fmt.Sprintf("id %s was answered %d times", id, len(own)),
+			Detail:  fmt.Sprintf("requested at seq %d, answered at %s", e.requested[0].Seq, seqs(own)),
 		})
 
 	case len(e.answered) == 0:
-		// The "never neither" arm. An id still outstanding when the subject
-		// died is not a subject that failed to answer -- it is a transcript
-		// that stopped before the answer could arrive, which supports no
-		// conclusion either way.
+		// The "never neither" arm. An answer charpy rewrote into something
+		// carrying another id, or none, is an answer the subject did send:
+		// reporting it as unanswered would be charpy grading its own
+		// interference. The run still owes a reader the fact, so it is
+		// inconclusive rather than silent.
+		if len(e.replaced) > 0 {
+			rep.Add(oracle.Finding{
+				Verdict: oracle.Inconclusive, Layer: Layer, Check: "id-resolves-once",
+				Seq:     e.replaced[0].Seq,
+				Summary: fmt.Sprintf("id %s was answered, and charpy replaced the answer", id),
+				Detail: fmt.Sprintf("requested at seq %d, replaced at %s",
+					e.requested[0].Seq, seqs(e.replaced)),
+				Reason: "charpy-replaced-the-answer",
+			})
+			return
+		}
+
+		// An id still outstanding when the subject died is not a subject that
+		// failed to answer -- it is a transcript that stopped before the
+		// answer could arrive, which supports no conclusion either way.
 		if died && e.requested[0].Seq < diedAt {
 			rep.Add(oracle.Finding{
 				Verdict: oracle.Inconclusive, Layer: Layer, Check: "id-resolves-once",
@@ -142,6 +188,27 @@ func idResolvesOnce(rep *oracle.Report, id string, e *exchange, died bool, diedA
 			Detail:  fmt.Sprintf("requested at seq %d, %s", e.requested[0].Seq, method(e.requested[0])),
 		})
 	}
+}
+
+// replacedKey is the exchange a rewritten frame used to belong to, or "" when
+// charpy's rewrite kept the id (or there was no rewrite).
+func replacedKey(f *transcript.FrameLine) string {
+	if f.Fault == nil || f.Fault.Replaced == nil {
+		return ""
+	}
+	return string(f.Fault.Replaced.IDType) + ":" + f.Fault.Replaced.ID
+}
+
+// ownAnswers is the answers the subject wrote, dropping the ones charpy
+// authored or rewrote.
+func ownAnswers(class transcript.Class, e *exchange) []*transcript.FrameLine {
+	var out []*transcript.FrameLine
+	for _, a := range e.answered {
+		if oracle.SubjectOriginated(class, a) {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 // I2: no response or error carries an id that was never requested on that

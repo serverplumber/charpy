@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
 	"github.com/serverplumber/charpy/internal/oracle/oracletest"
@@ -56,6 +57,58 @@ func TestIDResolvesOnce(t *testing.T) {
 		}
 		if !strings.Contains(f[0].Summary, "answered 2 times") {
 			t.Errorf("summary = %q", f[0].Summary)
+		}
+	})
+
+	// "Answered twice" is a claim about the subject. The duplicate that a
+	// vary_type or duplicate_id case puts on the wire is charpy's, and
+	// reporting it would be quoting our own injection back as evidence -- the
+	// verdict someone pastes into an issue tracker.
+	t.Run("a duplicate charpy injected is not the subject answering twice", func(t *testing.T) {
+		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
+			ToSubject(req("7", "tools/call")).
+			FromSubject(res("7")).Corrupted(res("7")).
+			Done())
+
+		if f := findings(got, "id-resolves-once"); len(f) != 0 {
+			t.Errorf("charpy's own duplicate was held against the subject: %+v", f)
+		}
+	})
+
+	t.Run("two answers charpy touched are still not the subject's", func(t *testing.T) {
+		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
+			ToSubject(req("7", "tools/call")).
+			Corrupted(res("7")).Corrupted(res("7")).
+			Done())
+
+		if f := findings(got, "id-resolves-once"); len(f) != 0 {
+			t.Errorf("findings: %+v", f)
+		}
+	})
+
+	// The malformed_json shape: the subject answered, charpy replaced the
+	// answer with bytes that parse to no id, and the request looks
+	// outstanding. Blaming the subject there is charpy grading its own
+	// interference -- and INCONCLUSIVE rather than silence, because a reader
+	// still needs to know the exchange was never completed.
+	t.Run("an answer charpy replaced is not an answer the subject withheld", func(t *testing.T) {
+		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
+			ToSubject(req("7", "tools/call")).
+			Replacing(envelope.NumberID(7), `{"jsonrpc":"2.0","id":7,"resu`).
+			Done())
+
+		f := findings(got, "id-resolves-once")
+		if len(f) != 1 {
+			t.Fatalf("findings: %+v", f)
+		}
+		if f[0].Verdict != oracle.Inconclusive {
+			t.Errorf("verdict = %q, want INCONCLUSIVE", f[0].Verdict)
+		}
+		if f[0].Reason != "charpy-replaced-the-answer" {
+			t.Errorf("reason = %q", f[0].Reason)
+		}
+		if strings.Contains(f[0].Summary, "never") {
+			t.Errorf("summary blames the subject: %q", f[0].Summary)
 		}
 	})
 

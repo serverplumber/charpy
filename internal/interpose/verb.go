@@ -223,3 +223,18 @@ func (c Case) TranscriptFault() *transcript.Fault {
 		Params:   c.Fault.Params,
 	}
 }
+
+// Rewrote returns the attribution for a frame charpy replaced, naming the id
+// the original carried when the replacement does not carry the same one.
+//
+// Without it a malformed_json rewrite is indistinguishable from an answer the
+// subject never sent: the bytes charpy put on the wire parse to no id, so the
+// request looks outstanding and the oracle blames the subject for charpy's
+// doing. Naming the id is what lets a reader tell the two apart.
+func (c Case) Rewrote(from, to envelope.Message) *transcript.Fault {
+	att := c.TranscriptFault()
+	if from.ID.Present() && (from.ID.Type() != to.ID.Type() || from.ID.Text() != to.ID.Text()) {
+		att.Replaced = from.ID
+	}
+	return att
+}

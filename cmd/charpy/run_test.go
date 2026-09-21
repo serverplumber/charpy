@@ -101,14 +101,22 @@ func transcripts(t *testing.T, dir string) []string {
 // from the command line: a glob is several runs, not one session with
 // several faults armed.
 func TestRunCaseGlobWritesOneTranscriptPerCase(t *testing.T) {
-	out, dir, code := runCLI(t, "--case", "id/*", "--revision", "2025-11-25", "--seed", "8f2c1a")
+	// frame/malformed-unbalanced corrupts the handshake, so its peer waits out
+	// the script deadline rather than finishing: a short one keeps that case's
+	// ending in the suite without paying thirty seconds for it.
+	out, dir, code := runCLI(t, "--case", "*", "--revision", "2025-11-25",
+		"--seed", "8f2c1a", "--timeout", "2s")
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
 	}
 
+	// The four the catalogue applies to a server over stdio on this revision:
+	// stream/truncate-mid-line, id/unsolicited-after-resolved,
+	// frame/malformed-unbalanced and schema/output-schema-violated. A fifth
+	// would belong here rather than silently widening the glob.
 	files := transcripts(t, dir)
-	if len(files) != 3 {
-		t.Fatalf("wrote %d transcripts, want one per id/* case\n%s", len(files), out)
+	if len(files) != 4 {
+		t.Fatalf("wrote %d transcripts, want one per applicable case\n%s", len(files), out)
 	}
 
 	// Every transcript is a complete run in its own right: its own header,
@@ -142,7 +150,7 @@ func TestRunCaseGlobWritesOneTranscriptPerCase(t *testing.T) {
 
 // A single case is a single run, and the fault it declares actually fires.
 func TestRunASingleCaseInjectsIt(t *testing.T) {
-	out, dir, code := runCLI(t, "--case", "id/duplicate-response",
+	out, dir, code := runCLI(t, "--case", "id/unsolicited-after-resolved",
 		"--revision", "2025-11-25", "--seed", "8f2c1a")
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
@@ -162,7 +170,7 @@ func TestRunASingleCaseInjectsIt(t *testing.T) {
 
 	// The run line quotes the citation, not the bare id: a bug report needs
 	// the revision and the seed to be reproducible from.
-	if !strings.Contains(out, "id/duplicate-response@2025-11-25#seed=8f2c1a") {
+	if !strings.Contains(out, "id/unsolicited-after-resolved@2025-11-25#seed=8f2c1a") {
 		t.Errorf("output does not quote the citation:\n%s", out)
 	}
 }
@@ -185,7 +193,7 @@ func TestRunRefusesACaseGlobThatMatchesNothing(t *testing.T) {
 func TestRunRefusesAMalformedSeed(t *testing.T) {
 	for _, s := range []string{"1", "8f2c1", "8F2C1A", "8f2c1g", "8f2c1a8f2c1a8f2c1"} {
 		t.Run(s, func(t *testing.T) {
-			out, dir, code := runCLI(t, "--case", "id/duplicate-response",
+			out, dir, code := runCLI(t, "--case", "id/unsolicited-after-resolved",
 				"--revision", "2025-11-25", "--seed", s)
 			if code != exitHarness {
 				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
@@ -204,7 +212,7 @@ func TestRunRefusesAMalformedSeed(t *testing.T) {
 // says otherwise, which is fine against a fixture and not against a subject
 // whose first tool does something.
 func TestRunPinsTheToolAndItsArguments(t *testing.T) {
-	out, dir, code := runCLI(t, "--case", "id/duplicate-response", "--revision", "2025-11-25",
+	out, dir, code := runCLI(t, "--case", "id/unsolicited-after-resolved", "--revision", "2025-11-25",
 		"--seed", "8f2c1a", "--tool", "nosuch", "--args", `{"x":1}`)
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
@@ -257,7 +265,7 @@ func rawFrames(t *testing.T, path string) string {
 func TestRunRefusesMalformedToolArguments(t *testing.T) {
 	for _, args := range []string{"{", `["x"]`, "3"} {
 		t.Run(args, func(t *testing.T) {
-			out, dir, code := runCLI(t, "--case", "id/duplicate-response",
+			out, dir, code := runCLI(t, "--case", "id/unsolicited-after-resolved",
 				"--revision", "2025-11-25", "--tool", "echo", "--args", args)
 			if code != exitHarness {
 				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
@@ -284,7 +292,7 @@ func TestRunRefusesToolWithoutACase(t *testing.T) {
 // charpy speaks first under owned stimulus, so it has to choose an era.
 // "auto" is for watching somebody else's handshake.
 func TestRunRefusesAutoRevisionWithACase(t *testing.T) {
-	out, _, code := runCLI(t, "--case", "id/duplicate-response")
+	out, _, code := runCLI(t, "--case", "id/unsolicited-after-resolved")
 	if code != exitHarness {
 		t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
 	}

@@ -158,6 +158,16 @@ type FaultLine struct {
 	Citation string         `json:"citation"`
 	Kind     string         `json:"kind"`
 	Params   map[string]any `json:"params,omitempty"`
+
+	// Replaced names the id the original frame carried, when charpy's
+	// rewrite did not keep it. See [Fault].
+	Replaced *ReplacedLine `json:"replaced,omitempty"`
+}
+
+// ReplacedLine is the envelope identity of a frame charpy rewrote away.
+type ReplacedLine struct {
+	ID     string          `json:"id"`
+	IDType envelope.IDType `json:"id_type"`
 }
 
 type SessionLine struct {
@@ -567,7 +577,11 @@ func faultLineFrom(f *Fault) (*FaultLine, error) {
 	if f.Kind == "" {
 		return nil, fmt.Errorf("transcript: fault on case %q names no mechanism", f.CaseID)
 	}
-	return &FaultLine{CaseID: f.CaseID, Citation: f.Citation, Kind: f.Kind, Params: f.Params}, nil
+	out := &FaultLine{CaseID: f.CaseID, Citation: f.Citation, Kind: f.Kind, Params: f.Params}
+	if f.Replaced.Present() {
+		out.Replaced = &ReplacedLine{ID: f.Replaced.Text(), IDType: f.Replaced.Type()}
+	}
+	return out, nil
 }
 
 // HTTPLine lowercases header names and puts every value through the run's

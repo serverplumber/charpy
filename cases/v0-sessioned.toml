@@ -82,7 +82,7 @@ summary      = "stdio frame cut before its terminating newline; the frame never 
 [[case]]
 id           = "id/duplicate-response"
 applies_to   = "*"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "sep:0"
 summary      = "The same request id is answered twice."
@@ -101,7 +101,7 @@ summary      = "The same request id is answered twice."
 [[case]]
 id           = "id/duplicate-response-vary-type"
 applies_to   = "*"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "none"
 summary      = "The id is answered as 7 and then as \"7\"; implementations disagree on whether these collide."

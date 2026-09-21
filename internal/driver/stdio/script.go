@@ -146,6 +146,15 @@ func (s *Script) Run(ctx context.Context) error {
 	if err != nil {
 		_ = s.peer.Close()
 		<-relayed
+		// A fault that lands on the handshake breaks the peer's own Connect,
+		// and that is the fault working rather than the run failing: a
+		// malformed initialize result leaves the peer waiting until the script
+		// deadline names why. The transcript already carries the corruption
+		// and the oracle judges it, so a named halt ends the run the same way
+		// a broken call does once the session is up.
+		if why := scenario.Why(sctx); cleanEnd(why) && why != nil {
+			return nil
+		}
 		return fmt.Errorf("stdio: %w", err)
 	}
 

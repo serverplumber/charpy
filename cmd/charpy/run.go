@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/serverplumber/charpy/cases"
 	"github.com/serverplumber/charpy/internal/catalogue"
@@ -62,6 +63,7 @@ func cmdRun(args []string, _ io.Writer) int {
 	hostileHTTP := fs.String("hostile-http", "", "serve hostile over HTTP at this address instead of stdio (e.g. :8080); the client under test connects here")
 	tool := fs.String("tool", "", "tool the script calls; empty takes the first the subject lists")
 	toolArgs := fs.String("args", "", "JSON object of arguments passed to every --tool call; empty sends none")
+	timeout := fs.Duration("timeout", 0, "how long a scripted run waits on a subject that has stopped answering (default 30s)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy run [flags] -- <subject command>\n"+
 			"       charpy run --subject-url <url> --case <glob> --revision <rev> [flags]\n\n"+
@@ -82,6 +84,10 @@ func cmdRun(args []string, _ io.Writer) int {
 	if code != exitClean {
 		return code
 	}
+	if *timeout < 0 {
+		fmt.Fprintf(os.Stderr, "charpy run: --timeout %s is negative\n", *timeout)
+		return exitHarness
+	}
 
 	if *subjectURL != "" {
 		if len(command) != 0 {
@@ -92,7 +98,7 @@ func cmdRun(args []string, _ io.Writer) int {
 		if code != exitClean {
 			return code
 		}
-		cfg.stim = stim
+		cfg.stim, cfg.timeout = stim, *timeout
 		return httpScripted(*subjectURL, cfg, *caseGlob, *outDir, *noRedact, out)
 	}
 
@@ -124,7 +130,7 @@ func cmdRun(args []string, _ io.Writer) int {
 	if code != exitClean {
 		return code
 	}
-	cfg.stim = stim
+	cfg.stim, cfg.timeout = stim, *timeout
 
 	if *caseGlob != "" {
 		return scripted(command, cfg, *caseGlob, *outDir, *noRedact, out)
@@ -177,6 +183,10 @@ type config struct {
 	// stim shapes what the script originates. Zero calls the first tool the
 	// subject lists, with no arguments.
 	stim scenario.Options
+
+	// timeout bounds a script whose subject has stopped answering. Zero takes
+	// the driver's own default.
+	timeout time.Duration
 }
 
 // stimulus reads the two flags that say what charpy originates.
@@ -502,6 +512,7 @@ func scriptOne(ctx context.Context, command []string, cfg config, c interpose.Ca
 		Case:     c,
 		Era:      cfg.revision,
 		Stimulus: cfg.stim,
+		Timeout:  cfg.timeout,
 		Options: stdio.Options{
 			Command:    command,
 			Env:        os.Environ(),
@@ -612,6 +623,7 @@ func httpScriptOne(ctx context.Context, url string, cfg config, c interpose.Case
 		Case:     c,
 		Era:      cfg.revision,
 		Stimulus: cfg.stim,
+		Timeout:  cfg.timeout,
 		Options: proxy.Options{
 			SubjectURL: url,
 			Transcript: tr,

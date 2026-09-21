@@ -130,6 +130,49 @@ implementation available, which is a pleasant place for an open problem to sit.
 
 ---
 
+## A one-faced run cannot tell "the subject passed" from "the subject was not asked"
+
+**Gap.** A fault has a direction, and it lands on whoever *receives* the frame it acts on. In a
+one-faced run against a server, an `s2c` fault -- a duplicated response, a malformed result, an
+answer to an id nobody asked for -- is delivered to charpy's own reference peer. The subject wrote
+the frame charpy corrupted; it is not the party the corruption is put to. So the invariants have
+nothing of the subject's to judge, the run reports no findings, and that silence renders exactly
+like a subject that was asked a hard question and answered it correctly.
+
+This is the conflation `oracle.md` §2 exists to prevent, one level up from the one `UNTRIGGERED`
+already closes. A case that never fired, a case that fired and found nothing, and a case that
+fired at charpy's own peer are three different reports, and charpy currently distinguishes only
+the first.
+
+**Why it exists.** Direction and subject are separate fields for good reason -- `direction` says
+where a fault lands, `subject` says who is under test -- but nothing checks that the fault's
+recipient *is* the subject. For a gateway the two always coincide: it receives on one face what it
+must forward on the other, so an `s2c` fault at its upstream face is a question put to the
+subject, and the answer is what leaves the other side. For a one-faced server run there is no
+other side, and the recipient is the harness.
+
+**Why it is not closed for v0.** The honest fix is a fourth non-verdict, and the verdict
+vocabulary is a public contract: it is what JUnit renders, what exit codes derive from, and what a
+reader of an archived transcript decodes a year later. Adding a member to it to describe a
+situation that the gateway driver removes for most cases is a poor trade made under time pressure.
+Two of the three cases this affected have instead been re-aimed at the subject classes that can
+receive them (`subject = ["client", "gateway"]`), which is a catalogue correction rather than a
+vocabulary change.
+
+**What closing it would take.** Selection knows the subject class, the transport and the case's
+direction, so it can compute whether a case's fault reaches the subject at all before the run
+starts. That is the same shape as the transport and subject-class filters it already applies. Two
+ways to spend it: drop such a case at selection, the way an out-of-revision case is dropped, or
+arm it and let coverage report the run as having put its question to the harness rather than to
+the subject. The second is more informative and costs a `reason` on an existing non-verdict rather
+than a new verdict.
+
+**Trigger to revisit.** The gateway driver landing, which gives every `s2c` case a real recipient
+and makes the remaining one-faced instances the exception rather than the rule -- or the first
+case whose silence is read as a pass.
+
+---
+
 ## A held frame cannot be delivered after an HTTP response ends
 
 **Gap.** The `hang` mechanism withholds a frame and, when the fault withdraws, does something with

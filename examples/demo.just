@@ -42,20 +42,22 @@ demo-build: build
 #   charpy replay <transcript>
 [doc('One case against a real subject over stdio, then the verdict')]
 demo: demo-build
-    ./charpy run --case id/duplicate-response --revision 2025-11-25 \
+    ./charpy run --case id/unsolicited-after-resolved --revision 2025-11-25 \
         --tool test_simple_text --out {{ex_out}} -- {{ex_server}}
     just demo-replay
 
 #   charpy run --case '<glob>' --revision <rev> --tool <tool> -- <subject cmd>
 #
-# The glob selects cases by permanent id; `charpy cases` lists them. Each case
-# is its own run against its own subject process, and its own transcript.
+# The glob selects cases by permanent id; `charpy cases` lists them, and
+# selection drops the ones this subject class or transport cannot run. Each
+# case is its own run against its own subject process, and its own transcript.
+# --timeout bounds a case whose fault leaves the subject unable to answer.
 # Without --tool, charpy calls whatever tool the subject lists first, which is
 # fine against a fixture and not against a subject whose first tool does
 # something.
 [doc('charpy drives the subject over stdio, one case per run')]
 demo-stdio: demo-build
-    ./charpy run --case 'id/*' --revision 2025-11-25 \
+    ./charpy run --case '*' --revision 2025-11-25 --timeout 5s \
         --tool test_simple_text --out {{ex_out}} -- {{ex_server}}
 
 #   charpy run --subject-url <url> --case '<glob>' --revision <rev> --tool <tool>
@@ -130,7 +132,7 @@ demo-github: demo-build demo-github-build
     rm -rf {{ex_out}}/github
     mkdir -p {{ex_out}}/github
     GITHUB_PERSONAL_ACCESS_TOKEN=dummy_not_a_real_token \
-        ./charpy run --case 'id/*' --revision 2025-11-25 --tool {{gh_tool}} \
+        ./charpy run --case '*' --revision 2025-11-25 --timeout 5s --tool {{gh_tool}} \
             --out {{ex_out}}/github -- {{gh_server}} stdio --read-only
     status=0
     for t in {{ex_out}}/github/*.jsonl; do

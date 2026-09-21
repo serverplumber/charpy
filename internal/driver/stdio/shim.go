@@ -293,7 +293,7 @@ func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.D
 		go s.release(held, plan.Hold, dir, to, att)
 	case plan.Deliver != nil:
 		s.inter.Rewrite(f, c, m, *plan.Deliver)
-		s.deliverCut(*plan.Deliver, dir, to, att, plan.Cut)
+		s.deliverCut(*plan.Deliver, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
 	}
 
 	for _, extra := range plan.After {

@@ -100,6 +100,18 @@ func (b *Builder) Corrupted(raw string) *Builder {
 	})
 }
 
+// Replacing writes a frame charpy rewrote into raw, naming the id the
+// subject's own answer carried. malformed_json is the mechanism that produces
+// this shape: what crosses parses to no id at all.
+func (b *Builder) Replacing(id envelope.ID, raw string) *Builder {
+	return b.Raw(b.dirFromSubject(), raw, &transcript.Fault{
+		CaseID:   "frame/malformed-unbalanced",
+		Citation: "frame/malformed-unbalanced@2025-11-25#seed=8f2c1a",
+		Kind:     "malformed_json",
+		Replaced: id,
+	})
+}
+
 func (b *Builder) dirToSubject() transcript.Direction {
 	if b.class == transcript.ClassClient {
 		return transcript.S2C

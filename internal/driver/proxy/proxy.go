@@ -243,7 +243,7 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 	if plan.Deliver == nil {
 		return nil, m, false
 	}
-	att := c.TranscriptFault()
+	att := c.Rewrote(m, *plan.Deliver)
 	p.inter.Rewrite(conn.FrameOf(m, transcript.S2C), c, m, *plan.Deliver)
 	conn.FaultEvent(transcript.FaultApplied, c, map[string]any{"verb": string(plan.Verb())})
 	return att, *plan.Deliver, true
@@ -331,7 +331,8 @@ func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		p.emitCut(sse, unit, plan.Cut, transcript.S2C, att, resp, conn)
 	case plan.Deliver != nil:
 		p.inter.Rewrite(f, c, m, *plan.Deliver)
-		p.emitEvent(sse, wire.EncodeEvent("message", plan.Deliver.Raw(), ""), transcript.S2C, att, resp, conn)
+		p.emitEvent(sse, wire.EncodeEvent("message", plan.Deliver.Raw(), ""), transcript.S2C,
+			c.Rewrote(m, *plan.Deliver), resp, conn)
 	}
 
 	for _, extra := range plan.After {

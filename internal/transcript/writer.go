@@ -118,6 +118,14 @@ type Fault struct {
 	Citation string
 	Kind     string
 	Params   map[string]any
+
+	// Replaced is the id the frame carried before charpy rewrote it, when the
+	// replacement no longer carries the same one. It is how a reader tells
+	// "the subject never answered" from "charpy replaced the answer": a
+	// malformed_json rewrite leaves bytes that parse to no id at all, and
+	// without this the oracle sees an outstanding request and blames the
+	// subject for charpy's own doing. Absent when the rewrite kept the id.
+	Replaced envelope.ID
 }
 
 // Session is the protocol-level session, which exists only through
