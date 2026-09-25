@@ -33,10 +33,6 @@ and reports what the implementation did.
 Named for the [Charpy impact test](https://en.wikipedia.org/wiki/Charpy_impact_test):
 it measures toughness under sudden load, not conformance to dimensions.
 
-> **Status: pre-alpha.** The design is settled and documented in
-> [`docs/design/`](docs/design/). The interposer is not built yet. Commands
-> parse and exit 2.
-
 **v0 finds bugs. v1 finds leaks.** v0 drives one client through a catalogue of hostile
 frames and asks whether the subject handles each correctly. v1 adds [soak
 mode](docs/design/soak.md) — a fleet of synthetic clients run for hours — and asks
@@ -131,8 +127,6 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 | Transcript | JSONL, `schema_version` on every line |
 | Verdicts | JSONL, referencing case citation and frame sequence numbers |
 | Test results | JUnit XML, one `<testcase>` per case citation |
-| Report | Static HTML directory, no server, openable locally |
-| Divergence table | Markdown and CSV |
 | Exit code | `0` clean · `1` MUST violation · `2` harness error · `3` subject failed to start · `4` invalid policy |
 
 ## Documentation
@@ -171,4 +165,9 @@ with the cross-SDK differential.
 
 ## License
 
-Not yet chosen.
+ISC — see [`LICENSE`](LICENSE).
+
+`spec/` and `schema/` are vendored from
+[`modelcontextprotocol/modelcontextprotocol`](https://github.com/modelcontextprotocol/modelcontextprotocol)
+and remain under that project's terms; see `spec/VENDORED.md` and
+`schema/VENDORED.md` for the commit they were pulled from.
