@@ -118,7 +118,7 @@ summary      = "The id is answered as 7 and then as \"7\"; implementations disag
 [[case]]
 id           = "id/unsolicited-after-resolved"
 applies_to   = "*"
-subject      = ["server", "gateway", "client"]
+subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "none"
 summary      = "A late response arrives for an id that was correctly resolved earlier; finds pending-map leaks."

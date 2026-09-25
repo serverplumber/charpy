@@ -42,7 +42,7 @@ demo-build: build
 #   charpy replay <transcript>
 [doc('One case against a real subject over stdio, then the verdict')]
 demo: demo-build
-    ./charpy run --case id/unsolicited-after-resolved --revision 2025-11-25 \
+    ./charpy run --case frame/malformed-unbalanced --revision 2025-11-25 --timeout 5s \
         --tool test_simple_text --out {{ex_out}} -- {{ex_server}}
     just demo-replay
 
