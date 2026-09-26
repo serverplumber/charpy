@@ -33,8 +33,14 @@ type Core struct {
 	Ledger     *interpose.Ledger
 	Transcript *transcript.Writer
 	Cases      []interpose.Case
-	Face       transcript.Face
-	Transport  transcript.Transport
+	// Settle, when set, is asked for the run's cases once the negotiated
+	// revision is known, and its answer replaces Cases before the header
+	// records what was armed. It is how a run on --revision auto arms: which
+	// cases apply, and what revision their citations name, are both facts
+	// about the handshake, and nothing before it can know them.
+	Settle    func(revision.Revision) []interpose.Case
+	Face      transcript.Face
+	Transport transcript.Transport
 	// Link is the correlation regime for a recorded frame. The one-faced shim
 	// and hostile driver return ViaNone; the proxy forwards the bytes and
 	// stamps a fresh Forwarded id. Nil is read as ViaNone.
@@ -42,6 +48,16 @@ type Core struct {
 
 	mu     sync.Mutex
 	header bool
+
+	// asks holds each connection's follow-up question, by connection id.
+	asks map[string]*ask
+}
+
+// ask is one follow-up question on a connection: armed until the request
+// crosses, then keyed by its wire id until the answer does.
+type ask struct {
+	dir transcript.Direction
+	key string
 }
 
 // Conn binds a Core to one connection's identity. Its methods are the
@@ -127,6 +143,9 @@ func (c *Core) settleRevision(m envelope.Message) {
 	}
 
 	c.header = true
+	if c.Settle != nil {
+		c.Cases = c.Settle(negotiated)
+	}
 	_ = c.Transcript.WriteHeader(transcript.Header{
 		Revision: &transcript.Negotiation{Negotiated: negotiated, Offered: offered, How: how},
 		Cases:    c.armed(),
@@ -228,3 +247,61 @@ func (n *Conn) Probe(method string, outcome transcript.ProbeOutcome, elapsedNS i
 
 // ConnID is this connection's id, for the ledger calls a driver makes directly.
 func (n *Conn) ConnID() string { return n.connID }
+
+// Ask marks the next request crossing this connection in dir as charpy's
+// follow-up question -- the one put to the subject after a fault so the
+// reaction layer has an answer to judge -- and returns a func that withdraws
+// the mark if the question never crossed.
+//
+// The question and its answer are kept out of the matcher's reach entirely,
+// not merely left unfaulted. An armed case with no ordinal, or an every-nth,
+// would otherwise fault the question and leave it no longer clean -- the
+// oracle rightly ignores a tampered request -- and a frame the matcher sees
+// is a frame it counts, so even an unfaulted question would spend an ordinal
+// the case's own traffic was waiting for. Kept out, the case selects exactly
+// the frames it would have selected with no follow-up at all.
+func (n *Conn) Ask(dir transcript.Direction) (withdraw func()) {
+	c := n.core
+	c.mu.Lock()
+	if c.asks == nil {
+		c.asks = map[string]*ask{}
+	}
+	a := &ask{dir: dir}
+	c.asks[n.connID] = a
+	c.mu.Unlock()
+
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		// Only a question that never crossed is withdrawn. One that did stays
+		// exempt until its answer crosses, however late, because a late
+		// answer is exactly the frame the oracle needs to see untouched.
+		if c.asks[n.connID] == a && a.key == "" {
+			delete(c.asks, n.connID)
+		}
+	}
+}
+
+// FollowUp reports whether m belongs to this connection's follow-up exchange,
+// and so must bypass the matcher. It is called on every frame, before
+// matching, because it is also what notices the question crossing: the id
+// the question went out with is the only way to know its answer.
+func (n *Conn) FollowUp(m envelope.Message, dir transcript.Direction) bool {
+	c := n.core
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	a, ok := c.asks[n.connID]
+	if !ok {
+		return false
+	}
+	switch {
+	case a.key == "" && m.Kind == envelope.KindRequest && dir == a.dir:
+		a.key = m.ID.Key()
+		return true
+	case a.key != "" && dir != a.dir && (m.Kind == envelope.KindResponse || m.Kind == envelope.KindError) &&
+		m.ID.Key() == a.key:
+		delete(c.asks, n.connID)
+		return true
+	}
+	return false
+}

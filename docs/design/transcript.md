@@ -320,16 +320,27 @@ session-isolation invariant partitions on.
 
 ### `fault`
 
-Null on frames charpy did not tamper with.
+Null on frames charpy did not tamper with -- and "tamper" means the bytes that crossed differ from
+the bytes that were written. A frame a case matched but delivered untouched and in full, beside what
+the case injected (a duplicate's original, the real answer next to a late one, a whole event before
+a close), carries no attribution: it is the subject's frame, and every layer that judges the subject
+must see it as one. That the case acted, and when, is `fault_applied`'s to record.
 
 ```jsonc
 "fault": {
   "case_id":  "stream/truncate-mid-event",
   "citation": "stream/truncate-mid-event@2025-11-25#seed=8f2c1a",
   "kind":     "truncate",
-  "params":   { "cut_at": "mid_event", "after_bytes": 91 }
+  "params":   { "cut_at": "mid_event", "after_bytes": 91 },
+  "replaced": { "id": "3", "id_type": "number", "kind": "response" }
 }
 ```
+
+`replaced` appears when what crossed no longer carries the id the original did: a rewrite that
+changed or dropped it, or a cut that stopped before it could parse. It names the id and what the
+frame was. A replaced *response* means the subject answered and charpy hid the answer; a replaced
+*request* means the subject was never asked, and is owed nothing under that id. `kind` is absent in
+transcripts written before it was recorded, which replaced only answers.
 
 ---
 
@@ -353,9 +364,9 @@ Null on frames charpy did not tamper with.
 | `stream_open` / `stream_close` | SSE stream or stdio pipe opened or closed | **Cancellation on 2026-07-28 HTTP**, truncation cases |
 | `subject_exit` | stdio subject process exited | Exit-code reporting, harness-vs-subject attribution |
 | `fault_scheduled` | Interposer selected a frame or moment for a fault | Case audit |
-| `fault_applied` | Fault took effect | Correlating a fault to its consequences |
+| `fault_applied` | Fault took effect; `detail.direction` is the way its frame was travelling | The reaction layer's anchor; who the fault was put to |
 | `fault_withdrawn` | Hang released, list restored, peer recovered | **Liveness clock starts here** |
-| `probe` | Liveness probe sent and its outcome | Liveness verdict |
+| `probe` | Liveness probe sent and its outcome | The reaction layer's recovery check |
 | `clock_advance` | Injected clock jumped | Replay determinism |
 | `note` | Free-text harness annotation | Debugging only; oracle ignores |
 

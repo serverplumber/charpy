@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/serverplumber/charpy/internal/clock"
@@ -48,15 +49,24 @@ type HTTPOptions struct {
 type HTTPServer struct {
 	o       HTTPOptions
 	proxy   *proxy.Proxy
+	ref     *peer.HTTPServer
 	refSrv  *http.Server
 	refLn   net.Listener
 	ingress *http.Server
 	ln      net.Listener
+
+	// askCtx bounds the follow-up pings; Run sets it before serving and ends
+	// it before shutting down. asking holds the sessions with a ping in
+	// flight, one per session for the reason the stdio driver keeps one.
+	askCtx context.Context
+	asks   sync.WaitGroup
+	mu     sync.Mutex
+	asking map[string]bool
 }
 
 // NewHTTP prepares a run. Nothing binds until Run.
 func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
-	refHandler, err := peer.ServerHandler(peer.Options{Era: o.Era})
+	ref, err := peer.ServerHandler(peer.Options{Era: o.Era})
 	if err != nil {
 		return nil, err
 	}
@@ -66,6 +76,7 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		return nil, fmt.Errorf("hostile: binding reference server: %w", err)
 	}
 
+	h := &HTTPServer{o: o, ref: ref, asking: map[string]bool{}}
 	pr, err := proxy.New(proxy.Options{
 		SubjectURL: "http://" + refLn.Addr().String() + "/",
 		// The client is the subject, faced upstream. charpy's reference server
@@ -81,6 +92,7 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		ClientID:   o.ClientID,
 		SessionID:  o.SessionID,
 		ConnID:     o.ConnID,
+		Applied:    h.ask,
 	})
 	if err != nil {
 		_ = refLn.Close()
@@ -97,14 +109,51 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		return nil, fmt.Errorf("hostile: binding ingress: %w", err)
 	}
 
-	return &HTTPServer{
-		o:       o,
-		proxy:   pr,
-		refSrv:  &http.Server{Handler: refHandler},
-		refLn:   refLn,
-		ingress: &http.Server{Handler: pr},
-		ln:      ln,
-	}, nil
+	h.proxy, h.refLn, h.ln = pr, refLn, ln
+	h.refSrv = &http.Server{Handler: ref}
+	h.ingress = &http.Server{Handler: pr}
+	return h, nil
+}
+
+// ask has charpy's reference server put one ping to the client holding
+// sessionID, after a fault acted on a response in that session. It is the
+// proxy's Applied hook, so it runs on the handler that applied the fault and
+// must not block it: the ping goes out on a stream that same proxy relays.
+//
+// The SDK sends it on the session's standalone GET stream, which the proxy
+// relays like any other event stream; it is marked as the follow-up first, so
+// the armed case cannot match it there. Over HTTP a then = "close" ends one
+// response stream and not the session, so unlike stdio it is still asked
+// (proxy.Proxy.Askable). A client that opened no standalone stream cannot be
+// asked by any server, and the SDK's refusal is noted rather than hidden.
+func (h *HTTPServer) ask(sessionID string) {
+	h.mu.Lock()
+	if h.asking[sessionID] || h.askCtx == nil {
+		h.mu.Unlock()
+		return
+	}
+	h.asking[sessionID] = true
+	ctx := h.askCtx
+	h.asks.Add(1)
+	h.mu.Unlock()
+
+	go func() {
+		defer h.asks.Done()
+		defer func() {
+			h.mu.Lock()
+			delete(h.asking, sessionID)
+			h.mu.Unlock()
+		}()
+
+		withdraw := h.proxy.Ask(sessionID, transcript.S2C)
+		defer withdraw()
+		err := h.ref.Ping(ctx, sessionID)
+		switch {
+		case err == nil, ctx.Err() != nil, errors.Is(err, peer.ErrCannotAsk):
+		default:
+			h.proxy.Note(sessionID, fmt.Sprintf("follow-up ping: %v", err))
+		}
+	}()
 }
 
 // Endpoint is the URL the client under test connects to, valid once Run has
@@ -120,12 +169,22 @@ func (h *HTTPServer) Endpoint() string {
 // (see NewHTTP), so Endpoint is valid before Run is called. It is relay-shaped:
 // the client drives, so a signal ends the run.
 func (h *HTTPServer) Run(ctx context.Context) error {
+	askCtx, stopAsking := context.WithCancel(ctx)
+	h.mu.Lock()
+	h.askCtx = askCtx
+	h.mu.Unlock()
+
 	refErr := make(chan error, 1)
 	go func() { refErr <- h.refSrv.Serve(h.refLn) }()
 	ingErr := make(chan error, 1)
 	go func() { ingErr <- h.ingress.Serve(h.ln) }()
 
 	<-ctx.Done()
+	// No ping starts after this, so the Wait below cannot race an Add.
+	h.mu.Lock()
+	h.askCtx = nil
+	h.mu.Unlock()
+	stopAsking()
 
 	shut := func(s *http.Server) {
 		sc, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -136,6 +195,7 @@ func (h *HTTPServer) Run(ctx context.Context) error {
 	}
 	shut(h.ingress)
 	shut(h.refSrv)
+	h.asks.Wait()
 
 	if e := <-ingErr; e != nil && !errors.Is(e, http.ErrServerClosed) {
 		return fmt.Errorf("hostile: ingress: %w", e)

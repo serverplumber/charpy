@@ -249,3 +249,72 @@ func TestTranscriptFault(t *testing.T) {
 }
 
 func transcriptable(f *transcript.Fault) (*transcript.Fault, error) { return f, nil }
+
+// A frame cut short hides its id exactly as a rewrite does, and the
+// attribution has to say which frame it replaced -- or the oracle reads
+// charpy's truncation as the subject never answering. A cut that delivers the
+// whole frame, and a frame delivered untouched, carry no attribution at all:
+// the subject wrote them and charpy did not change them.
+func TestCrossedSettlesWhatTheAttributionClaims(t *testing.T) {
+	c := testCase("stream/truncate-mid-event")
+	answer, err := envelope.Parse([]byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := answer.Raw()
+	line := append(append([]byte{}, raw...), '\n')
+
+	for _, tc := range []struct {
+		name     string
+		body     []byte
+		whole    bool
+		want     bool // attributed at all
+		replaced bool
+	}{
+		{"cut mid-frame", raw[:len(raw)/2], false, true, true},
+		{"cut before any byte", nil, false, true, true},
+		{"cut before the newline only", raw, false, true, false},
+		{"delivered whole and untouched", line, true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			att := interpose.Crossed(c.TranscriptFault(), answer, answer, tc.body, tc.whole)
+			if (att != nil) != tc.want {
+				t.Fatalf("attributed = %v, want %v", att != nil, tc.want)
+			}
+			if att == nil {
+				return
+			}
+			if got := att.Replaced.Present(); got != tc.replaced {
+				t.Fatalf("replaced present = %v, want %v", got, tc.replaced)
+			}
+			if tc.replaced {
+				if att.Replaced.Type() != envelope.IDNumber || att.Replaced.Text() != "3" {
+					t.Errorf("replaced = %s %s, want number 3", att.Replaced.Type(), att.Replaced.Text())
+				}
+				if att.ReplacedKind != envelope.KindResponse {
+					t.Errorf("replaced kind = %q, want response", att.ReplacedKind)
+				}
+			}
+			if att.CaseID != c.ID || att.Citation != c.Citation {
+				t.Errorf("the attribution lost its case: %+v", att)
+			}
+		})
+	}
+
+	// A rewrite delivered whole is still charpy's frame.
+	other, _ := envelope.Parse([]byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text"}]}}`))
+	if att := interpose.Crossed(c.Rewrote(answer, other), answer, other, other.Raw(), true); att == nil {
+		t.Error("a rewritten frame delivered whole lost its attribution")
+	}
+
+	// A destroyed request says it was a request.
+	req, _ := envelope.Parse([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call"}`))
+	if att := interpose.Crossed(c.TranscriptFault(), req, req, req.Raw()[:5], false); att.ReplacedKind != envelope.KindRequest {
+		t.Errorf("replaced kind = %q, want request", att.ReplacedKind)
+	}
+
+	// A frame nothing faulted stays unattributed; settling never invents one.
+	if att := interpose.Crossed(nil, answer, answer, raw[:3], false); att != nil {
+		t.Errorf("an unattributed frame gained an attribution: %+v", att)
+	}
+}

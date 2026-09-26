@@ -6,6 +6,11 @@
 #
 # Case IDs here are permanent. Revision and seed qualify them at citation
 # time: stream/truncate-mid-event@2025-11-25#seed=8f2c1a
+#
+# A damaged frame is a question put to whoever receives it (ADR-013), so every
+# case states its direction and the loader checks it reaches every subject the
+# case names: c2s at the downstream face for a server, s2c at the upstream face
+# for a client, and for a gateway the face it receives on.
 
 schema_version = 1
 
@@ -14,7 +19,7 @@ schema_version = 1
 [[case]]
 id           = "stream/truncate-mid-event"
 applies_to   = ">=2025-03-26"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 transport    = ["http"]
 verdict      = "OBSERVED"
 derives_from = "spec:2025-11-25/basic/transports#streamable-http"
@@ -22,7 +27,7 @@ summary      = "SSE stream cut inside an event's data field."
 
   [case.match]
   method     = "tools/call"
-  face       = "downstream"
+  face       = "upstream"
   direction  = "s2c"
   occurrence = 2
   scope      = "session"
@@ -39,7 +44,7 @@ summary      = "SSE stream cut inside an event's data field."
 [[case]]
 id           = "stream/truncate-event-boundary"
 applies_to   = ">=2025-03-26"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 transport    = ["http"]
 verdict      = "OBSERVED"
 derives_from = "spec:2025-11-25/basic/transports#streamable-http"
@@ -47,7 +52,7 @@ summary      = "SSE stream stops cleanly between events; every event delivered w
 
   [case.match]
   method    = "tools/call"
-  face      = "downstream"
+  face      = "upstream"
   direction = "s2c"
 
   [case.fault]
@@ -62,20 +67,43 @@ summary      = "SSE stream stops cleanly between events; every event delivered w
 [[case]]
 id           = "stream/truncate-mid-line"
 applies_to   = "*"
-subject      = ["server"]
+subject      = ["client"]
 transport    = ["stdio"]
 verdict      = "OBSERVED"
 derives_from = "spec:2025-11-25/basic/transports#stdio"
 summary      = "stdio frame cut before its terminating newline; the frame never delimits."
 
   [case.match]
-  face      = "downstream"
+  method    = "tools/call"
+  face      = "upstream"
   direction = "s2c"
 
   [case.fault]
   kind   = "truncate"
   cut_at = "mid_line"
   then   = "stall"
+
+[[case]]
+id           = "stream/truncate-request-body"
+applies_to   = ">=2025-03-26"
+subject      = ["server", "gateway"]
+transport    = ["http"]
+verdict      = "OBSERVED"
+derives_from = "spec:2025-11-25/basic/transports#sending-messages-to-the-server"
+summary      = "A request body ends mid-frame, as a client that died mid-write leaves it; the server must reject it with an HTTP error and keep serving."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "request"
+
+  [case.fault]
+  kind   = "truncate"
+  cut_at = "mid_frame"
+
+  [case.expect]
+  expect_http_status = 400
 
 # --- id ---------------------------------------------------------------------
 
@@ -89,7 +117,9 @@ summary      = "The same request id is answered twice."
 
   [case.match]
   method    = "tools/call"
+  face      = "upstream"
   direction = "s2c"
+  kind      = "response"
 
   [case.fault]
   kind = "duplicate_id"
@@ -102,13 +132,16 @@ summary      = "The same request id is answered twice."
 id           = "id/duplicate-response-vary-type"
 applies_to   = "*"
 subject      = ["client", "gateway"]
+observed_by  = ["differential"]
 verdict      = "OBSERVED"
 derives_from = "none"
 summary      = "The id is answered as 7 and then as \"7\"; implementations disagree on whether these collide."
 
   [case.match]
   method    = "tools/call"
+  face      = "upstream"
   direction = "s2c"
+  kind      = "response"
 
   [case.fault]
   kind      = "duplicate_id"
@@ -124,26 +157,64 @@ derives_from = "none"
 summary      = "A late response arrives for an id that was correctly resolved earlier; finds pending-map leaks."
 
   [case.match]
-  direction = "s2c"
+  method     = "tools/call"
+  face       = "upstream"
+  direction  = "s2c"
+  occurrence = 2
 
   [case.fault]
   kind      = "unsolicited_response"
   id_source = "already_resolved"
 
-  [case.expect]
-  invariants = ["no-unsolicited-response"]
+[[case]]
+id           = "id/duplicate-request-inflight"
+applies_to   = "*"
+subject      = ["server", "gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "The same request id arrives twice while the first is still in flight; what the server does with the second is the question."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "request"
+
+  [case.fault]
+  kind = "duplicate_id"
+  mode = "concurrent_request"
+
+[[case]]
+id           = "id/unsolicited-to-server"
+applies_to   = "*"
+subject      = ["server", "gateway"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "A response arrives for an id the server never used; it must be dropped, and the server must keep serving."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "request"
+
+  [case.fault]
+  kind      = "unsolicited_response"
+  id_source = "never_used"
 
 # --- frame ------------------------------------------------------------------
 
 [[case]]
 id           = "frame/malformed-unbalanced"
 applies_to   = "*"
-subject      = ["server", "gateway", "client"]
+subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "none"
 summary      = "A frame with unbalanced braces; must not wedge the parser or the connection."
 
   [case.match]
+  method    = "tools/call"
+  face      = "upstream"
   direction = "s2c"
 
   [case.fault]
@@ -152,19 +223,63 @@ summary      = "A frame with unbalanced braces; must not wedge the parser or the
   [case.expect]
   liveness_probe_within_ms = 15000
 
+[[case]]
+id           = "frame/malformed-request"
+applies_to   = "*"
+subject      = ["server", "gateway"]
+transport    = ["stdio"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "A request with unbalanced braces on a stdio line; JSON-RPC asks for a -32700 parse error, and the server must keep serving."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "request"
+
+  [case.fault]
+  kind = "malformed_json"
+
+  [case.expect]
+  expect_error_code = -32700
+
+[[case]]
+id           = "frame/malformed-request-body"
+applies_to   = ">=2025-03-26"
+subject      = ["server", "gateway"]
+transport    = ["http"]
+verdict      = "OBSERVED"
+derives_from = "spec:2025-11-25/basic/transports#sending-messages-to-the-server"
+summary      = "A request body with unbalanced braces; the server must reject it with an HTTP error and keep serving."
+
+  [case.match]
+  method    = "tools/call"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "request"
+
+  [case.fault]
+  kind = "malformed_json"
+
+  [case.expect]
+  expect_http_status = 400
+
 # --- schema -----------------------------------------------------------------
 
 [[case]]
 id           = "schema/output-schema-violated"
 applies_to   = ">=2025-06-18"
-subject      = ["server"]
-verdict      = "MUST"
+subject      = ["client", "gateway"]
+verdict      = "OBSERVED"
 derives_from = "schema:#/definitions/CallToolResult"
-summary      = "structuredContent violates the outputSchema the server itself declared in tools/list."
+summary      = "structuredContent violates the outputSchema its server declared in tools/list; a client that validates results must not accept it."
 
   [case.match]
   method    = "tools/call"
+  face      = "upstream"
   direction = "s2c"
+  kind      = "response"
 
   [case.fault]
   kind   = "schema_violation"
@@ -182,7 +297,10 @@ derives_from = "none"
 summary      = "A tool disappears upstream with no list_changed; gateways that poll rather than trust notifications should still converge."
 
   [case.match]
-  face = "upstream"
+  method    = "notifications/tools/list_changed"
+  face      = "upstream"
+  direction = "s2c"
+  kind      = "notification"
 
   [case.fault]
   kind   = "manifest_mutate"
@@ -204,7 +322,9 @@ derives_from = "none"
 summary      = "An upstream credential or session id appears in a downstream frame."
 
   [case.match]
-  face = "upstream"
+  face      = "upstream"
+  direction = "s2c"
+  kind      = "response"
 
   [case.fault]
   kind = "hang"
@@ -225,7 +345,12 @@ derives_from = "none"
 summary      = "The peer reconnects claiming fewer capabilities than before; a cached capability must not be reused."
 
   [case.match]
-  face = "upstream"
+  method     = "initialize"
+  face       = "upstream"
+  direction  = "s2c"
+  kind       = "response"
+  occurrence = 2
+  scope      = "run"
 
   [case.fault]
   kind                = "capability_flip"

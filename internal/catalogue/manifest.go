@@ -38,6 +38,7 @@ type Case struct {
 	AppliesTo       string    `toml:"applies_to"`
 	Subject         []Subject `toml:"subject"`
 	Transport       []string  `toml:"transport,omitempty"`
+	ObservedBy      []string  `toml:"observed_by,omitempty"`
 	Verdict         Verdict   `toml:"verdict"`
 	DerivesFrom     string    `toml:"derives_from"`
 	Summary         string    `toml:"summary"`
@@ -72,6 +73,34 @@ func (c Case) SupportsTransport(t string) bool {
 		return true
 	}
 	return slices.Contains(c.Transport, t)
+}
+
+// Observers is what can see a case's answer, in the order a reader should
+// reach for them. Only the wire is built: every driver today judges what
+// crossed it, so a case whose answer lives anywhere else cannot be judged yet.
+var Observers = []string{"wire", "inproc", "differential"}
+
+// ObservableBy reports whether any of the available observers can see the
+// case's answer. A case names none means the wire, which is what most cases
+// need.
+//
+// It is applicability, like transport and subject class (ADR-013). A case
+// whose answer the wire cannot show -- a client that silently takes "7" for
+// 7, a pending map that leaks -- would arm, fire, and report the generic
+// reaction while the question it exists to ask went unanswered: UNTRIGGERED's
+// twin, a fault that fired with nobody able to see the answer. So selection
+// drops it where nothing can observe it.
+func (c Case) ObservableBy(available ...string) bool {
+	need := c.ObservedBy
+	if len(need) == 0 {
+		need = []string{"wire"}
+	}
+	for _, n := range need {
+		if slices.Contains(available, n) {
+			return true
+		}
+	}
+	return false
 }
 
 // SupportsSubject reports whether a case applies to a subject class. An empty
@@ -279,6 +308,11 @@ func validate(cs *Case, file string) (errs, warnings []string) {
 			fail("case %q: unknown transport %q", cs.ID, tr)
 		}
 	}
+	for _, o := range cs.ObservedBy {
+		if !slices.Contains(Observers, o) {
+			fail("case %q: unknown observer %q; accepts: %s", cs.ID, o, strings.Join(Observers, ", "))
+		}
+	}
 
 	if strings.TrimSpace(cs.Summary) == "" {
 		fail("case %q: summary is required; it appears in the report and in JUnit", cs.ID)
@@ -302,17 +336,25 @@ func validate(cs *Case, file string) (errs, warnings []string) {
 		}
 	}
 
-	for _, e := range checkMatch(cs.Match) {
+	matchErrs := checkMatch(cs.Match)
+	for _, e := range matchErrs {
 		fail("case %q: %s", cs.ID, e)
+	}
+	// Who a fault reaches, and what it can act on, are only worth checking
+	// over tables that are themselves valid; otherwise one typo reports three
+	// times.
+	if len(matchErrs) == 0 && len(cs.Fault) > 0 && len(checkFault(cs.Fault)) == 0 {
+		for _, e := range checkRecipient(cs.Subject, cs.Match) {
+			fail("case %q: %s", cs.ID, e)
+		}
+		for _, e := range checkActs(cs.Fault, cs.Match) {
+			fail("case %q: %s", cs.ID, e)
+		}
 	}
 	for _, e := range checkExpect(cs.Expect) {
 		fail("case %q: %s", cs.ID, e)
 	}
 
-	if len(cs.Match) == 0 {
-		warn("case %q: empty [case.match] matches the first frame on any face; "+
-			"this is almost never intended", cs.ID)
-	}
 	_, hasOcc := cs.Match["occurrence"]
 	_, hasEvery := cs.Match["occurrence_every"]
 	if hasOcc && hasEvery {

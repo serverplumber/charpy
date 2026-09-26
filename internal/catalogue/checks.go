@@ -165,6 +165,82 @@ func checkExpect(table map[string]any) []string {
 	return errs
 }
 
+// checkRecipient validates that a case's fault reaches every subject class it
+// lists.
+//
+// A damaged frame is a question put to whoever receives it (ADR-013). A case
+// whose direction delivers its fault to charpy's own peer instead arms, fires,
+// and reports nothing -- and nothing renders exactly like a subject that
+// passed. That is an authoring error, true of the case on every run, so it is
+// refused here rather than reported in every run's output. It is why the
+// direction must be stated at all: a matcher that leaves it open selects
+// frames going both ways, and half of them reach charpy.
+func checkRecipient(subjects []Subject, match map[string]any) []string {
+	dir, _ := match["direction"].(string)
+	face, _ := match["face"].(string)
+	if dir == "" {
+		return []string{"[case.match] needs a direction: a damaged frame is put to whoever " +
+			"receives it, and without one the case also damages frames charpy's own peer receives"}
+	}
+
+	var errs []string
+	for _, s := range subjects {
+		var ok bool
+		var want string
+		switch s {
+		case SubjectServer:
+			ok, want = dir == "c2s" && (face == "" || face == "downstream"),
+				`direction = "c2s" (face "downstream", if given)`
+		case SubjectClient:
+			ok, want = dir == "s2c" && (face == "" || face == "upstream"),
+				`direction = "s2c" (face "upstream", if given)`
+		case SubjectGateway:
+			// A gateway receives on both of its faces, so the face is what
+			// says which side of it the fault is put to; left open, the
+			// matcher also damages what the gateway itself sends.
+			ok, want = (face == "upstream" && dir == "s2c") || (face == "downstream" && dir == "c2s"),
+				`direction = "s2c" on face "upstream", or "c2s" on face "downstream"`
+		default:
+			continue
+		}
+		if !ok {
+			errs = append(errs, fmt.Sprintf("its fault does not reach a %s subject, which receives "+
+				"%s; this case matches direction = %q, face = %q", s, want, dir, face))
+		}
+	}
+	return errs
+}
+
+// checkActs validates that a matcher selects only frames the mechanism can act
+// on. A mechanism that refuses a frame at run time says ErrNotApplicable, and
+// the case reads as one that never applied; a case built to select such frames
+// is wrong on every run, so the loader says so.
+func checkActs(faultTable, match map[string]any) []string {
+	kind, _ := faultTable["kind"].(string)
+	m, ok := fault.Lookup(kind)
+	if !ok {
+		return nil // checkFault has already said so
+	}
+	acts := m.ActsOn(faultTable)
+	if acts == nil {
+		return nil
+	}
+	names := make([]string, len(acts))
+	for i, k := range acts {
+		names[i] = string(k)
+	}
+	got, _ := match["kind"].(string)
+	if got == "" {
+		return []string{fmt.Sprintf("kind %q acts only on %s frames, so [case.match] must name "+
+			"one with kind", kind, strings.Join(names, " or "))}
+	}
+	if !slices.Contains(names, got) {
+		return []string{fmt.Sprintf("kind %q acts only on %s frames, and [case.match] selects %s",
+			kind, strings.Join(names, " or "), got)}
+	}
+	return nil
+}
+
 // checkType validates a free-form value against a registry-declared type.
 // go-toml decodes integers as int64 and booleans as bool.
 func checkType(v any, typ, where, key string) string {

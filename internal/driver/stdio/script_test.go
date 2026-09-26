@@ -10,8 +10,12 @@ import (
 	"github.com/serverplumber/charpy/cases"
 	"github.com/serverplumber/charpy/internal/catalogue"
 	"github.com/serverplumber/charpy/internal/clock"
+	"github.com/serverplumber/charpy/internal/driver/drivertest"
 	"github.com/serverplumber/charpy/internal/driver/stdio"
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/oracle"
+	"github.com/serverplumber/charpy/internal/oracle/reaction"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
@@ -69,6 +73,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 
 	return run{
 		lines:   decodeLines(t, transcriptBuf.String()),
+		raw:     transcriptBuf.String(),
 		subjErr: subjErr.String(),
 	}
 }
@@ -214,11 +219,12 @@ func TestAFaultLandsOnOwnedStimulus(t *testing.T) {
 	}
 }
 
-// The catalogue, unmodified, against a real subject. Every directional case
-// charpy ships is s2c, and until the driver stopped deciding the direction
-// for itself not one of them could fire.
+// The catalogue, unmodified, against a real subject: a case put to a server
+// arrives at the server. The fault is "the same request id arrives twice while
+// the first is in flight", so the transcript must show that id cross toward
+// the subject twice -- once as the peer sent it, once as charpy's copy.
 func TestAShippedCaseRunsAsWritten(t *testing.T) {
-	loaded := shippedCase(t, "id/duplicate-response")
+	loaded := shippedCase(t, "id/duplicate-request-inflight")
 
 	r := script(t, loaded, revision.V20251125)
 
@@ -226,12 +232,9 @@ func TestAShippedCaseRunsAsWritten(t *testing.T) {
 		t.Fatalf("the shipped case never fired; events: %v", r.ofType("event"))
 	}
 
-	// The fault is "the same request id is answered twice", so the transcript
-	// must show an id resolving twice -- which is what invariant I1 reads a
-	// transcript for, and the reason the case exists.
 	seen := map[string]int{}
 	for _, l := range r.ofType("frame") {
-		if l["direction"] != "s2c" || l["kind"] != "response" {
+		if l["direction"] != "c2s" || l["kind"] != "request" || l["method"] != "tools/call" {
 			continue
 		}
 		if id, ok := l["id"].(string); ok {
@@ -245,7 +248,7 @@ func TestAShippedCaseRunsAsWritten(t *testing.T) {
 		}
 	}
 	if !doubled {
-		t.Errorf("no id was answered twice; responses: %v", seen)
+		t.Errorf("no request id reached the server twice; requests: %v", seen)
 	}
 }
 
@@ -289,4 +292,116 @@ func shippedCase(t *testing.T, id string) interpose.Case {
 	}
 	t.Fatalf("case %s is not in the shipped catalogue", id)
 	return interpose.Case{}
+}
+
+// A fault that reaches the subject is followed by one question on the same
+// session, so the reaction layer has an answer to judge rather than
+// nothing-asked-after-fault.
+//
+// The case matches every request toward the subject, with no method and
+// occurrence_every = 1, which is the shape that would fault the follow-up too
+// if the matcher were allowed to see it. unsolicited_response leaves the matched
+// request whole and puts an extra frame before it, so the subject can still
+// answer the script and the session survives to be asked.
+func TestAFollowUpIsAskedAfterTheFault(t *testing.T) {
+	c := interpose.Case{
+		ID:       "id/unsolicited-to-server",
+		Citation: "id/unsolicited-to-server@2025-11-25#seed=8f2c1a",
+		Match:    interpose.Match{Direction: transcript.C2S, Kind: "request", Every: 1},
+		Fault:    interpose.Fault{Kind: "unsolicited_response", Params: map[string]any{"id_source": "never_used"}},
+	}
+	r := script(t, c, revision.V20251125)
+
+	tr := drivertest.Read(t, r.raw)
+	q, _ := drivertest.FollowUpAnswered(t, tr)
+	// The last request the script sent is the follow-up, so every fault is
+	// followed by it; and it is the era's probe method, not a second call.
+	if q.MethodName() != "ping" {
+		t.Errorf("follow-up was %q, want ping at %s", q.MethodName(), revision.V20251125)
+	}
+	drivertest.ReactionAnswered(t, tr)
+}
+
+// Nothing acted, so nothing is followed up: the script's traffic stays exactly
+// what the case derives, and a clean run gains no request it did not ask for.
+func TestNoFollowUpWithoutAFault(t *testing.T) {
+	r := script(t, quiet(), revision.V20251125)
+	for _, l := range r.ofType("frame") {
+		if l["method"] == "ping" {
+			t.Fatalf("a run with no fault sent a follow-up ping: %v", l)
+		}
+	}
+}
+
+// A c2s fault that destroys the peer's own request -- the subject never
+// receives it, so it never answers it -- must not leave the script waiting out
+// its deadline. charpy answers its own peer, attributed to the case, and the
+// script goes on to ask the question after the fault. Whatever the subject then
+// does is the reaction layer's to report: this fixture is the pinned Go SDK's
+// stdio server, which exits on a malformed line, so here that is an exit; a
+// subject that survives would be reported as answering.
+func TestADestroyedRequestIsAnsweredByCharpyAndTheScriptGoesOn(t *testing.T) {
+	c := interpose.Case{
+		ID:       "frame/malformed-request",
+		Citation: "frame/malformed-request@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Direction: transcript.C2S, Kind: "request",
+		},
+		Fault: interpose.Fault{Kind: "malformed_json"},
+	}
+	start := time.Now()
+	r := script(t, c, revision.V20251125)
+	// The script's deadline is 5s; a peer left waiting would sit all of it out.
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("the run took %s: the peer waited on a request the subject never received", took)
+	}
+
+	tr := drivertest.Read(t, r.raw)
+	var callID string
+	var answered, asked bool
+	var faultSeq int64 = -1
+	for _, e := range tr.Entries {
+		if ev := e.Event; ev != nil && ev.EventKind == transcript.FaultApplied {
+			faultSeq = ev.Seq
+		}
+		f := e.Frame
+		if f == nil {
+			continue
+		}
+		if f.Fault != nil && f.Fault.Replaced != nil && f.Fault.Replaced.Kind == envelope.KindRequest {
+			callID = f.Fault.Replaced.ID
+		}
+		id, _ := f.IDText()
+		if callID != "" && f.Direction == transcript.S2C && f.Kind == envelope.KindError && id == callID {
+			answered = true
+			if !f.Tampered() {
+				t.Error("charpy's answer to its own peer is recorded as the subject's")
+			} else if f.Fault.Replaced != nil {
+				t.Errorf("charpy's own answer claims to have replaced %v", f.Fault.Replaced)
+			}
+		}
+		if faultSeq >= 0 && f.Seq > faultSeq && f.Direction == transcript.C2S &&
+			f.Kind == envelope.KindRequest && !f.Tampered() {
+			asked = true
+		}
+	}
+	if callID == "" {
+		t.Fatal("no destroyed request recorded")
+	}
+	if !answered {
+		t.Errorf("nothing answered the peer's destroyed request %s", callID)
+	}
+	if !asked {
+		t.Error("the script asked nothing after the fault")
+	}
+
+	for _, f := range reaction.Check(tr).Findings {
+		if f.Check != "reaction" {
+			continue
+		}
+		if f.Verdict != oracle.Observed {
+			t.Errorf("reaction = %s %s (%s), want an observed reaction", f.Verdict, f.Summary, f.Reason)
+		}
+		t.Logf("reaction: %s -- %s", f.Summary, f.Detail)
+	}
 }

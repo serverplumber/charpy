@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
@@ -120,7 +121,7 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 		e := exchanges[id]
 		idResolvesOnce(rep, class, id, e, died, diedAt)
 		noUnsolicitedResponse(rep, class, id, e)
-		noDuplicateInflightID(rep, id, e)
+		noDuplicateInflightID(rep, class, id, e)
 	}
 }
 
@@ -142,8 +143,14 @@ func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *ex
 	// charpy rewrote is still the subject's answer arriving.
 	own := ownAnswers(class, e)
 
+	// Twice is too many only if the subject was asked once. A subject handed
+	// the same id twice -- a duplicate charpy sent beside the original -- and
+	// answering each is doing what it was asked; that is the duplicate case's
+	// question, and it is judged by what the subject did, not by this count.
+	asked := received(class, e)
+
 	switch {
-	case len(own) > 1:
+	case len(own) > max(1, asked):
 		rep.Add(oracle.Finding{
 			Verdict: oracle.Observed, Layer: Layer, Check: "id-resolves-once",
 			Seq:     own[1].Seq,
@@ -190,13 +197,36 @@ func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *ex
 	}
 }
 
-// replacedKey is the exchange a rewritten frame used to belong to, or "" when
-// charpy's rewrite kept the id (or there was no rewrite).
+// replacedKey is the exchange an answer charpy replaced used to belong to, or
+// "" when there was no such answer: charpy kept the id, did not touch the
+// frame, or what it replaced was a request.
+//
+// A replaced request is not filed anywhere. The subject never received a
+// request with that id, so it owes that id nothing, and filing it as an answer
+// would report "charpy replaced the answer" for a question that was never put.
+// An attribution naming no kind predates the field and replaced an answer,
+// which is all those runs could replace.
 func replacedKey(f *transcript.FrameLine) string {
 	if f.Fault == nil || f.Fault.Replaced == nil {
 		return ""
 	}
+	switch f.Fault.Replaced.Kind {
+	case "", envelope.KindResponse, envelope.KindError:
+	default:
+		return ""
+	}
 	return string(f.Fault.Replaced.IDType) + ":" + f.Fault.Replaced.ID
+}
+
+// received counts the requests under this id that crossed toward the subject.
+func received(class transcript.Class, e *exchange) int {
+	n := 0
+	for _, r := range e.requested {
+		if oracle.SubjectReceives(class, r.Face, r.Direction) {
+			n++
+		}
+	}
+	return n
 }
 
 // ownAnswers is the answers the subject wrote, dropping the ones charpy
@@ -233,11 +263,21 @@ func noUnsolicitedResponse(rep *oracle.Report, class transcript.Class, id string
 }
 
 // I3: no two requests share an id while both are in flight on one connection.
-// This is an id-allocation bug, which fails differently again.
-func noDuplicateInflightID(rep *oracle.Report, id string, e *exchange) {
-	if len(e.requested) < 2 {
+// This is an id-allocation bug, which fails differently again -- and it is only
+// the subject's when the subject allocated the ids. Requests the subject
+// received were numbered by whoever sent them: charpy's peer, a client charpy
+// is relaying, or charpy itself, which is what a duplicate-request case does.
+func noDuplicateInflightID(rep *oracle.Report, class transcript.Class, id string, e *exchange) {
+	var requested []*transcript.FrameLine
+	for _, r := range e.requested {
+		if oracle.SubjectOriginated(class, r) {
+			requested = append(requested, r)
+		}
+	}
+	if len(requested) < 2 {
 		return
 	}
+	e = &exchange{requested: requested, answered: e.answered}
 
 	// Reuse after the first was answered is not the fault; overlap is. The
 	// second request is in flight alongside the first when it arrives before

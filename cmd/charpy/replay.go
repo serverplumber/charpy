@@ -8,10 +8,12 @@ import (
 	"os"
 	"strings"
 
+	"github.com/serverplumber/charpy/cases"
+	"github.com/serverplumber/charpy/internal/catalogue"
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/oracle/coverage"
 	"github.com/serverplumber/charpy/internal/oracle/invariant"
-	"github.com/serverplumber/charpy/internal/oracle/liveness"
+	"github.com/serverplumber/charpy/internal/oracle/reaction"
 	"github.com/serverplumber/charpy/internal/oracle/schemacheck"
 	"github.com/serverplumber/charpy/internal/report"
 	"github.com/serverplumber/charpy/internal/transcript"
@@ -28,7 +30,7 @@ func cmdReplay(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	format := fs.String("format", "text", "text, jsonl or junit")
-	only := fs.String("oracle", "", "run one layer: schema, invariant, coverage or liveness")
+	only := fs.String("oracle", "", "run one layer: schema, invariant, coverage or reaction")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy replay [flags] <transcript.jsonl>\n\n")
 		fs.PrintDefaults()
@@ -103,18 +105,44 @@ func judge(t *transcript.Transcript, only string) (oracle.Report, int) {
 	if only == "" || only == coverage.Layer {
 		rep.Findings = append(rep.Findings, coverage.Check(t).Findings...)
 	}
-	if only == "" || only == liveness.Layer {
-		rep.Findings = append(rep.Findings, liveness.Check(t).Findings...)
+	if only == "" || only == reaction.Layer {
+		expected, err := expectations()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "charpy replay: %v\n", err)
+			return rep, exitHarness
+		}
+		rep.Findings = append(rep.Findings, reaction.Check(t).Findings...)
+		rep.Findings = append(rep.Findings, reaction.Expected(t, expected).Findings...)
 	}
 	if only != "" && only != schemacheck.Layer && only != invariant.Layer &&
-		only != coverage.Layer && only != liveness.Layer {
+		only != coverage.Layer && only != reaction.Layer {
 		fmt.Fprintf(os.Stderr, "charpy replay: unknown oracle %q; v0 has %s and %s\n",
-			only, schemacheck.Layer, invariant.Layer+", "+coverage.Layer+", "+liveness.Layer)
+			only, schemacheck.Layer, invariant.Layer+", "+coverage.Layer+", "+reaction.Layer)
 		return rep, exitHarness
 	}
 
 	rep.Sort()
 	return rep, exitClean
+}
+
+// expectations looks a case's [case.expect] up in the shipped catalogue by id.
+// A case this charpy does not know -- withdrawn long ago, or from a newer
+// catalogue -- declares nothing here, and is judged by the generic tier alone.
+func expectations() (func(string) reaction.Expectation, error) {
+	cat, _, err := catalogue.Load(cases.FS, ".")
+	if err != nil {
+		return nil, fmt.Errorf("the shipped catalogue does not load: %w", err)
+	}
+	return func(id string) reaction.Expectation {
+		c, ok := cat.Lookup(id)
+		if !ok {
+			return reaction.Expectation{}
+		}
+		var e reaction.Expectation
+		e.ErrorCode, _ = c.ExpectInt("expect_error_code")
+		e.HTTPStatus, _ = c.ExpectInt("expect_http_status")
+		return e
+	}, nil
 }
 
 func render(w io.Writer, format string, rep oracle.Report) error {

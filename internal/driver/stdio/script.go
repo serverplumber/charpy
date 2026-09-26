@@ -105,6 +105,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 	inner := o.Options
 	inner.In, inner.Out = p.Out, p.In
 	inner.Cases = []interpose.Case{o.Case}
+	inner.AnswerDestroyed = true
 
 	shim, err := New(inner)
 	if err != nil {
@@ -159,6 +160,16 @@ func (s *Script) Run(ctx context.Context) error {
 	}
 
 	scriptErr := s.run(sctx, sess)
+
+	// One question after the fault, on the same session, so the subject's
+	// reaction has something to be judged by (ADR-013). It runs under the
+	// script's deadline, so a subject that never answers ends the run as a
+	// stopped answer does -- with a transcript, and without an error.
+	if scenario.Askable(sctx, scriptErr) && s.shim.Askable() {
+		withdraw := s.shim.Ask()
+		scenario.FollowUp(sctx, sess)
+		withdraw()
+	}
 	halt.Done()
 
 	// Closing the session first lets the peer say goodbye over a wire that is

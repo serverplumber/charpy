@@ -58,6 +58,7 @@ status       = "active"
 | `applies_to` | yes | Revision range; resolves against the ordered list in `revisions.md` §1 |
 | `subject` | yes | Any of `server`, `client`, `gateway` |
 | `transport` | no | Defaults to both `stdio` and `http` |
+| `observed_by` | no | What can see the subject's answer: `wire` (default) · `inproc` · `differential`. Selection drops a case no available observer can judge |
 | `verdict` | yes | `MUST` or `OBSERVED` |
 | `derives_from` | yes | `spec:` · `sep:` · `schema:` · `none` |
 | `summary` | yes | One sentence; appears in the report and JUnit |
@@ -75,13 +76,27 @@ Selects which frame the fault attaches to. All present keys must match; absent k
 | `kind` | `request` · `response` · `error` · `notification` |
 | `client_id` | Exact id, or a `*` glob |
 | `session_id` | Exact id, or a `*` glob |
-| `occurrence` | Integer, 1-based — lets a case say "the third `tools/call`" |
-| `occurrence_every` | Integer — every Nth match, mutually exclusive with `occurrence` |
+| `occurrence` | Integer, 1-based — lets a case say "the third `tools/call`". Defaults to 1 |
+| `occurrence_every` | Integer — every Nth match; `1` is every match. Mutually exclusive with `occurrence` |
 | `after_mono_ms` | Integer — not before this point on the clock |
 | `scope` | Which population the ordinal counts within: `run` (default) · `client` · `session` · `connection` |
 
-An empty `[case.match]` matches the first frame on any face, which is almost never what an author
-means. The loader warns on it.
+**A case with neither `occurrence` nor `occurrence_every` fires once, on the first matching frame.**
+One fault is what a case means: a transcript carrying the same fault on every frame that fits is a
+puzzle rather than a finding (ADR-012), and under a relay, where charpy does not choose the traffic,
+"every" is a storm. A case that does want each frame says `occurrence_every = 1`.
+
+A matcher should also name the frame its summary means. A case that names only a direction lands on
+the first frame going that way, which is the handshake answer, and a case about whether a
+connection survives then leaves no connection to ask about.
+
+**`direction` is required, and it must put the fault to the subject.** A damaged frame is a question
+put to whoever receives it, so the loader refuses a case whose direction and face do not deliver
+its fault to every subject class it lists: `c2s` (downstream) for a server, `s2c` (upstream) for a
+client, and for a gateway an explicit face it receives on. A mechanism that acts only on some frame
+kinds also requires `kind`, naming one of them. Both are refused at load rather than reported per
+run, because a case that breaks them is wrong on every run (`decisions.md` ADR-013). An empty
+`[case.match]` -- which used to earn a warning -- is refused for the same reason.
 
 ### `scope`, and why it exists before it is needed
 
@@ -128,10 +143,14 @@ run.
 
 | Key | Meaning |
 |---|---|
-| `invariants` | Invariant names that must hold. Unknown names are a load error. |
+| `invariants` | Invariant names that must hold. Unknown names are a load error. Informational: the universal invariants run on every transcript regardless |
 | `liveness_probe_within_ms` | Real-time budget for recovery after withdrawal (`oracle.md` §6) |
-| `expect_error_code` | The subject is expected to answer with this JSON-RPC code |
-| `expect_http_status` | HTTP only |
+| `expect_error_code` | The subject is expected to answer the faulted request with this JSON-RPC code; a null-id error counts, since that is how JSON-RPC answers a request too broken to carry an id |
+| `expect_http_status` | The subject's first HTTP answer after the fault is expected to carry this status. HTTP only |
+
+The two `expect_` keys are judged by the reaction layer's `expectation` check (`oracle.md` §6),
+which reads them from the catalogue by case id at replay: the transcript names the case, not what
+it expects.
 
 ---
 

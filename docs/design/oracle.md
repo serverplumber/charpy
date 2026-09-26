@@ -251,9 +251,79 @@ the run.
 
 ---
 
-## 6. Layer 4 — liveness
+## 6. Layer 4 — reaction
 
-After the fault is withdrawn, does the subject resume serving within N injected-clock seconds?
+What did the subject do after a fault reached it? (`decisions.md` ADR-013. This layer was called
+liveness, and recovery is still one of its checks.)
+
+Layers 1 and 2 judge the **author** of a frame, and rightly exclude any frame charpy touched. But a
+damaged frame is a question put to whoever **receives** it, and the answer is never inside the
+damaged frame: it is in what the recipient does next. So this layer is anchored at each
+`fault_applied` event and judges only the subject's own frames after it, on the same connection.
+Every verdict here is `OBSERVED` at most; a reaction has no generated artifact behind it.
+
+**Who was asked.** `fault_applied` records the direction of the frame the fault acted on
+(`detail.direction`), which names the recipient. A fault on a frame the subject *sent* reached
+charpy's own peer, and the subject was never asked. That is reported as `SKIPPED` with reason
+`fault-reached-charpy`, never read as a pass. The loader is what keeps such a case out of the
+catalogue; this is the backstop for relayed runs and for transcripts that predate the rule. A
+`fault_applied` with no recorded direction predates ADR-013 and yields nothing, because who the
+fault was put to is exactly what it cannot say.
+
+**The generic check, `reaction`, for every fault that reached the subject.** Walking forward from
+the fault, on its connection:
+
+| What the transcript shows | Verdict |
+|---|---|
+| the subject answered a request it received after the fault | `OBSERVED` — answered, and how long after |
+| the subject exited, not by charpy's hand | `OBSERVED` — exited, with code and signal |
+| a request after the fault was still open when the run ended | `OBSERVED` — did not answer, and for how long |
+| nothing asked the subject anything after the fault | `INCONCLUSIVE`, `nothing-asked-after-fault` |
+
+A request asked *before* the fault does not count even if it is answered after: the question is
+whether the subject still serves, and that exchange was already under way. A request charpy
+tampered with is not a question the subject can be held to. The unanswered row is worded as the
+fact it is -- open, for how long -- because under relay the run ends on a signal, and a request in
+flight at that moment says little; the duration is what lets a reader tell a wedge from a
+shutdown.
+
+Getting an answer out of a fault needs the stimulus to ask a question after it, and the drivers
+now do. Under owned stimulus, over stdio and HTTP, charpy's peer asks one follow-up on the same
+session once its script is done and a fault has acted: the liveness probe's method for the
+negotiated era, `ping` through 2025-11-25 and `tools/list` after. In the hostile drivers,
+charpy's reference server pings the client under test through the SDK after each fault toward it,
+one ping in flight at a time; over HTTP the SDK sends it on the session's standalone GET stream.
+Either way the question and its answer are kept out of the matcher, so the armed case can neither
+fault them nor count them. A frame is also recorded before it is written, so an answer can never
+take an earlier `seq` than its question. The follow-up runs under the script's deadline, or the
+relayed run's lifetime, and a subject that never answers is the "did not answer" row, not a
+failed run.
+
+Four places still ask nothing, and `nothing-asked-after-fault` is the honest result there rather
+than a gap in the layer. A server under 2026-07-28 originates no requests, so the hostile drivers
+have no question to put. A fault that broke the session leaves nothing to ask on: a handshake that
+never completed, a stdio stream charpy closed or stalled, or charpy's own peer failing its session
+after a corrupted answer. For the last, the fresh-session recovery probe is the check. A hostile
+HTTP client that never opens a standalone stream cannot be asked by any server. And the proxy
+records an initialize under a connection of its own, since the request carries no session id yet,
+so a fault on that response and the ping that follows it land on different connections. Keeping
+charpy's peer usable after a `c2s` fault destroys its own request is the next piece of work.
+
+**The case-specific check, `expectation`,** judges what a case declares in `[case.expect]`, on the
+same anchor. `expect_error_code` looks for the subject's answer to the faulted request -- an error
+under its id, or under a null id, which is how JSON-RPC answers a request too broken to carry one --
+and reports it against the code the case expects; `expect_http_status` reads the status of the
+subject's first HTTP answer after the fault. Each is `OBSERVED` and worded as the fact it is
+("answered with error -32601; the case expects -32700"): an expectation is the case's reading of
+what a subject should do, not a generated artifact rejecting a frame. Expectations are read from
+the catalogue by case id at replay, because the transcript names the case and not what it expects;
+a case this charpy does not know expects nothing. "Never called the removed tool" and the like are
+not yet keys.
+
+### Recovery
+
+After the fault is withdrawn, does the subject resume serving on a fresh session within the
+case's budget?
 
 Everyone tests that failure doesn't crash. Almost nobody tests recovery, and recovery is the
 production question — a gateway that stops reconnecting after a transient upstream failure is broken
@@ -267,7 +337,7 @@ is about the subject resuming service, not that session surviving. `probe` event
 `outcome` and `elapsed_mono_ns`; the verdict is read from them offline, and because the probe's
 deadline was the budget, the outcome already encodes within-budget (`ok`) versus not (`timeout`).
 
-Liveness is owned-stimulus only, so in v0 it runs on the proxy: a relayed client cannot be made to
+The recovery probe is owned-stimulus only, so in v0 it runs on the proxy: a relayed client cannot be made to
 probe on cue (§5.1), and over stdio a connection-killing fault leaves no session to probe from.
 
 **The probe method is revision-dependent**, because `ping` was removed in 2026-07-28:
@@ -282,7 +352,7 @@ probe on cue (§5.1), and over stdio a connection-killing fault leaves no sessio
 It is a heavier probe, which is stated in the report so a slow recovery is not misread as a slow
 probe.
 
-A liveness verdict is `OBSERVED`, never `MUST`: recovery has no generated artifact behind it, so
+A recovery verdict is `OBSERVED`, never `MUST`: recovery has no generated artifact behind it, so
 the layer reports the fact -- recovered, or did not recover within the budget -- for a human to
 weigh rather than failing the build. Reporting the *success* is the point; almost nobody tests
 recovery, so "recovered in 1.2s" is the observation worth making, not a silence.

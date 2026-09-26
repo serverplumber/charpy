@@ -48,6 +48,14 @@ func (c Case) Compile(r revision.Revision, seed string) (interpose.Case, error) 
 	}, nil
 }
 
+// ExpectInt reads an integer [case.expect] key, which the loader has already
+// checked is one. The oracle reads expectations through this, by case id, when
+// it judges a transcript: the transcript names the case, not what it expects.
+func (c Case) ExpectInt(key string) (int64, bool) {
+	v, ok := c.Expect[key].(int64)
+	return v, ok
+}
+
 // livenessBudget reads [case.expect].liveness_probe_within_ms, already
 // validated as an integer by the loader. It is the one expect key a driver
 // consumes; the rest stays oracle input.

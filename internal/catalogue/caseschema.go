@@ -80,6 +80,13 @@ func caseSchema() map[string]any {
 				"items":       map[string]any{"enum": []string{"stdio", "http"}},
 				"description": "Transports the case applies to. Defaults to both.",
 			},
+			"observed_by": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"enum": Observers},
+				"description": "What can see the subject's answer to this case. Defaults to the wire. " +
+					"Selection drops a case no available observer can judge, rather than arming a fault " +
+					"whose answer nobody can see.",
+			},
 			"verdict": map[string]any{
 				"anyOf": []any{
 					constWithDoc("MUST", "Schema-mechanical only: requires a schema: source, "+

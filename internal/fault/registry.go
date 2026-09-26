@@ -1,6 +1,10 @@
 package fault
 
-import "slices"
+import (
+	"slices"
+
+	"github.com/serverplumber/charpy/internal/envelope"
+)
 
 // The registry lives here, next to the mechanism implementations, rather than
 // in the catalogue: a parameter table maintained apart from the code it
@@ -36,6 +40,26 @@ type Mechanism struct {
 	Kind    string
 	Summary string
 	Params  []Param
+
+	// Acts says which frame kinds the mechanism can act on, given a case's
+	// parameters. Nil means any frame. A case whose matcher could select a
+	// frame the mechanism refuses would fire on it as ErrNotApplicable and
+	// read as a case that never applied, so the loader requires such a case
+	// to name a kind this allows (ADR-013).
+	Acts func(params map[string]any) []envelope.Kind
+}
+
+// ActsOn returns the frame kinds m can act on under params, or nil for any.
+func (m Mechanism) ActsOn(params map[string]any) []envelope.Kind {
+	if m.Acts == nil {
+		return nil
+	}
+	return m.Acts(params)
+}
+
+// answers is what a mechanism acting on a reply accepts: a result or an error.
+func answers(map[string]any) []envelope.Kind {
+	return []envelope.Kind{envelope.KindResponse, envelope.KindError}
 }
 
 // mechanisms is the v0 registry, in the order docs/design/faults-and-cases.md
@@ -45,6 +69,7 @@ var mechanisms = []Mechanism{
 	{
 		Kind:    "hang",
 		Summary: "Hold a response open and never deliver it. The liveness half of the suite depends on this mechanism's withdrawal behaviour.",
+		Acts:    answers,
 		Params: []Param{
 			{Name: "withdraw_after_ms", Type: "integer", Default: "0",
 				Summary: "Injected-clock ms until the fault is withdrawn; 0 means never. fault_withdrawn is emitted at the withdrawal instant and is where the liveness clock starts."},
@@ -144,6 +169,12 @@ var mechanisms = []Mechanism{
 	{
 		Kind:    "duplicate_id",
 		Summary: "Reuse a JSON-RPC id.",
+		Acts: func(params map[string]any) []envelope.Kind {
+			if str(params, "mode", "double_response") == "double_response" {
+				return answers(params)
+			}
+			return []envelope.Kind{envelope.KindRequest}
+		},
 		Params: []Param{
 			{Name: "mode", Default: "double_response",
 				Summary: "How the id is reused.",
@@ -172,6 +203,14 @@ var mechanisms = []Mechanism{
 	{
 		Kind:    "manifest_mutate",
 		Summary: "Change the tool, prompt or resource list mid-session.",
+		// A list result where charpy relays a real server; the list_changed
+		// notification itself when the fault is its suppression.
+		Acts: func(params map[string]any) []envelope.Kind {
+			if str(params, "notify", "list_changed") == "silent" {
+				return []envelope.Kind{envelope.KindResponse, envelope.KindNotification}
+			}
+			return []envelope.Kind{envelope.KindResponse}
+		},
 		Params: []Param{
 			{Name: "list", Default: "tools",
 				Summary: "Which list mutates.",
@@ -200,6 +239,7 @@ var mechanisms = []Mechanism{
 	{
 		Kind:    "capability_flip",
 		Summary: "Reconnect as a peer claiming different capabilities.",
+		Acts:    func(map[string]any) []envelope.Kind { return []envelope.Kind{envelope.KindResponse} },
 		Params: []Param{
 			{Name: "field", Default: "capabilities",
 				Summary: "What changes across the reconnect.",

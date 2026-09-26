@@ -12,6 +12,7 @@ import (
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/scenario"
+	"github.com/serverplumber/charpy/internal/transcript"
 )
 
 // DefaultTimeout bounds a scripted run the subject has stopped answering,
@@ -62,6 +63,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 
 	inner := o.Options
 	inner.Cases = []interpose.Case{o.Case}
+	inner.AnswerDestroyed = true
 	pr, err := New(inner)
 	if err != nil {
 		return nil, err
@@ -119,6 +121,16 @@ func (s *Script) Run(ctx context.Context) error {
 	}
 
 	scriptErr := s.run(sctx, sess)
+
+	// One question after the fault, on the same session, so the subject's
+	// reaction has something to be judged by (ADR-013). It runs under the
+	// script's deadline, as the stdio driver's does, and a subject that never
+	// answers ends it without an error.
+	if scenario.Askable(sctx, scriptErr) && s.proxy.Askable() {
+		withdraw := s.proxy.Ask(sess.ID(), transcript.C2S)
+		scenario.FollowUp(sctx, sess)
+		withdraw()
+	}
 
 	// Liveness: after a fault has acted, does the subject serve again within
 	// the budget? Only when the case asked (a budget) and a fault actually

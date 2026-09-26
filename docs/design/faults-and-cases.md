@@ -128,10 +128,15 @@ transcript and it shifts occurrence counters, which is a real cost and a far sma
 any client legitimately makes, and it is visible in the transcript rather than hidden inside
 someone else's arguments.
 
-`declared_output_schema` is the sharpest target: the *subject's own* `outputSchema` from `tools/list`
-becomes the oracle. charpy does not need to know what the tool means, only that the server declared
-a shape and then broke it. That is a MUST-eligible finding under `verdict = "MUST"` because the
-rejecting artifact is the subject's own declaration.
+`declared_output_schema` is the sharpest target, and it asks a question of the *recipient*: a result
+that breaks the `outputSchema` its server declared in `tools/list`, put to a client or gateway that
+is supposed to validate what it receives. It is OBSERVED at most, because what is judged is what the
+recipient did about the frame, not the frame (`decisions.md` ADR-013). This paragraph once called it
+MUST-eligible "because the rejecting artifact is the subject's own declaration", which conflated two
+things. *Detecting* a server that breaks its own declared schema needs no fault at all -- it is
+layer 1 over any run, where the subject's own untouched frame is what the schema rejects
+(`oracle.md` §3). *Injecting* a break makes the violating frame charpy's, and layer 1 rightly
+refuses to hold charpy's frames against anyone.
 
 ### `duplicate_id`
 
@@ -208,6 +213,14 @@ mean anything over hours: `slow_drip`, `upstream_flap`, `reconnect_without_close
 ---
 
 ## 4. Cases are mechanism × parameters × subject × revision range
+
+**A case's fault must reach its subject.** A damaged frame is a question put to whoever receives
+it, so a case states its `direction`, and the loader checks it delivers the fault to every subject
+class the case lists: `c2s` at the downstream face for a server, `s2c` at the upstream face for a
+client, and for a gateway the face it receives on, stated explicitly. A mechanism that acts only on
+some frame kinds -- `capability_flip` on a handshake result, `duplicate_id` on an answer or a
+request by mode, `hang` on an answer -- requires the matcher to name one of them. Both are refused
+at load, because a case that breaks them is wrong on every run (ADR-013).
 
 A case binds a mechanism and its parameters to a matcher, a subject class, and a revision range:
 

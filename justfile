@@ -52,16 +52,25 @@ vet:
 
 # Format the code
 fmt:
-    git ls-files '*.go' | xargs gofmt -l -w
+    just _go-files | xargs -r gofmt -l -w
 
 # Fail if anything is unformatted, rather than reformatting it
 lint:
     #!/usr/bin/env bash
     set -eo pipefail
-    # Tracked files only: examples/src holds subjects charpy did not write and
-    # does not get to have opinions about.
-    out=$(git ls-files '*.go' | xargs gofmt -l)
+    out=$(just _go-files | xargs -r gofmt -l)
     if [ -n "$out" ]; then echo "unformatted:"; echo "$out"; exit 1; fi
+
+# List every .go file that could be committed, for fmt and lint to share
+_go-files:
+    #!/usr/bin/env bash
+    set -eo pipefail
+    # Tracked or new, as long as it is not ignored -- examples/src holds
+    # subjects charpy did not write and does not get to have opinions about.
+    # What is on disk is what counts, so a new file is formatted before it is
+    # added and a file already moved or deleted is not handed to gofmt.
+    git ls-files --cached --others --exclude-standard '*.go' |
+        while read -r f; do if [ -e "$f" ]; then echo "$f"; fi; done
 
 # The determinism guarantee, as a gate rather than an aspiration: replaying one
 # transcript twice must produce byte-identical verdicts (decisions.md ADR-001).

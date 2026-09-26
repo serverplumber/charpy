@@ -185,6 +185,58 @@ occurrence_every = 3
 [case.fault]
 kind = "hang"`,
 		},
+		{
+			name: "an observer that does not exist",
+			want: "unknown observer",
+			body: coherence("subject = [\"server\"]\nobserved_by = [\"telepathy\"]", `direction = "c2s"`, `kind = "malformed_json"`),
+		},
+		// ADR-013: a fault is put to whoever receives the frame it damages.
+		{
+			name: "no direction, so half the frames it damages reach charpy",
+			want: "needs a direction",
+			body: coherence(`subject = ["server"]`, `method = "tools/call"`, `kind = "malformed_json"`),
+		},
+		{
+			name: "an s2c fault on a server subject reaches charpy's peer",
+			want: "does not reach a server subject",
+			body: coherence(`subject = ["server"]`, `direction = "s2c"`, `kind = "malformed_json"`),
+		},
+		{
+			name: "a c2s fault on a client subject reaches charpy's server",
+			want: "does not reach a client subject",
+			body: coherence(`subject = ["client"]`, `direction = "c2s"`, `kind = "malformed_json"`),
+		},
+		{
+			name: "a gateway fault must say which face",
+			want: "does not reach a gateway subject",
+			body: coherence(`subject = ["gateway"]`, `direction = "s2c"`, `kind = "malformed_json"`),
+		},
+		{
+			name: "a gateway's own output is not put to the gateway",
+			want: "does not reach a gateway subject",
+			body: coherence(`subject = ["gateway"]`, "direction = \"s2c\"\nface = \"downstream\"", `kind = "malformed_json"`),
+		},
+		{
+			name: "one direction cannot reach both a server and a client",
+			want: "does not reach a client subject",
+			body: coherence(`subject = ["server", "client"]`, `direction = "c2s"`, `kind = "malformed_json"`),
+		},
+		{
+			name: "a kind-restricted mechanism must be told the kind",
+			want: "must name one with kind",
+			body: coherence(`subject = ["client"]`, `direction = "s2c"`, `kind = "capability_flip"`),
+		},
+		{
+			name: "and the kind it is told must be one it acts on",
+			want: "acts only on response frames",
+			body: coherence(`subject = ["client"]`, "direction = \"s2c\"\nkind = \"request\"", `kind = "capability_flip"`),
+		},
+		{
+			name: "a mode decides what duplicate_id acts on",
+			want: "acts only on request frames",
+			body: coherence(`subject = ["server"]`, "direction = \"c2s\"\nkind = \"response\"",
+				"kind = \"duplicate_id\"\nmode = \"concurrent_request\""),
+		},
 	}
 
 	for _, tc := range tests {
@@ -241,8 +293,9 @@ derives_from = "none"
 summary = "s"
 [case.match]
 method = "tools/call"
+direction = "c2s"
 [case.fault]
-kind = "hang"
+kind = "malformed_json"
 `
 	fsys := fstest.MapFS{
 		"cases/a.toml": &fstest.MapFile{Data: []byte("schema_version = 1\n" + c)},
@@ -258,7 +311,10 @@ kind = "hang"
 	}
 }
 
-func TestEmptyMatchWarns(t *testing.T) {
+// An empty [case.match] used to earn a warning: it matches the first frame on
+// any face, which is almost never what an author means. It is refused now,
+// because a case must state the direction that puts its fault to the subject.
+func TestEmptyMatchIsRefused(t *testing.T) {
 	fsys := fstest.MapFS{
 		"cases/x.toml": &fstest.MapFile{Data: []byte(`schema_version = 1
 [[case]]
@@ -269,15 +325,12 @@ verdict = "OBSERVED"
 derives_from = "none"
 summary = "s"
 [case.fault]
-kind = "hang"
+kind = "malformed_json"
 `)},
 	}
-	_, warnings, err := Load(fsys, "cases")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(warnings) == 0 {
-		t.Error("an empty [case.match] should warn; it matches the first frame on any face")
+	_, _, err := Load(fsys, "cases")
+	if err == nil || !strings.Contains(err.Error(), "needs a direction") {
+		t.Errorf("an empty [case.match] loaded: %v", err)
 	}
 }
 
@@ -295,8 +348,9 @@ status = "withdrawn"
 withdrawn_reason = "superseded by id/thing"
 [case.match]
 method = "tools/call"
+direction = "c2s"
 [case.fault]
-kind = "hang"
+kind = "malformed_json"
 `)},
 	}
 	cat, _, err := Load(fsys, "cases")
@@ -308,5 +362,48 @@ kind = "hang"
 	}
 	if n := len(cat.Applicable(revision.V20251125)); n != 0 {
 		t.Errorf("withdrawn case should not be applicable, got %d", n)
+	}
+}
+
+// coherence builds a case differing only in who it names, what it matches and
+// what fault it carries: the three things the recipient rule relates.
+func coherence(subject, match, fault string) string {
+	return "[[case]]\nid = \"frame/thing\"\napplies_to = \"*\"\n" + subject +
+		"\nverdict = \"OBSERVED\"\nderives_from = \"none\"\nsummary = \"s\"\n" +
+		"[case.match]\n" + match + "\n[case.fault]\n" + fault
+}
+
+// The rules accept what they are for: a fault each named subject receives, on a
+// frame kind the mechanism acts on.
+func TestCoherentCasesLoad(t *testing.T) {
+	for name, body := range map[string]string{
+		"c2s to a server":            coherence(`subject = ["server"]`, `direction = "c2s"`, `kind = "malformed_json"`),
+		"s2c to a client":            coherence(`subject = ["client"]`, "direction = \"s2c\"\nface = \"upstream\"", `kind = "malformed_json"`),
+		"s2c upstream to a gateway":  coherence(`subject = ["client", "gateway"]`, "direction = \"s2c\"\nface = \"upstream\"", `kind = "malformed_json"`),
+		"c2s downstream to both":     coherence(`subject = ["server", "gateway"]`, "direction = \"c2s\"\nface = \"downstream\"", `kind = "malformed_json"`),
+		"a kind the mechanism takes": coherence(`subject = ["client"]`, "direction = \"s2c\"\nkind = \"response\"", `kind = "capability_flip"`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fsys := fstest.MapFS{"cases/x.toml": &fstest.MapFile{Data: []byte("schema_version = 1\n\n" + body + "\n")}}
+			if _, _, err := Load(fsys, "cases"); err != nil {
+				t.Errorf("a coherent case was refused:\n%v", err)
+			}
+		})
+	}
+}
+
+// A case names what can see its answer, and the wire is what it means when it
+// names nothing. Only what a run has can judge it.
+func TestObservableBy(t *testing.T) {
+	plain := Case{}
+	if !plain.ObservableBy("wire") {
+		t.Error("a case naming no observer should be observable on the wire")
+	}
+	differential := Case{ObservedBy: []string{"differential"}}
+	if differential.ObservableBy("wire") {
+		t.Error("a case whose answer only the differential sees was observable on the wire")
+	}
+	if !differential.ObservableBy("wire", "differential") {
+		t.Error("a case was not observable by the observer it names")
 	}
 }

@@ -89,11 +89,15 @@
         "params": { "type": "object" },
         "replaced": {
           "type": "object",
-          "description": "The envelope identity the frame carried before charpy rewrote it, present only when the replacement does not carry the same one. Tells a reader that an answer existed and charpy replaced it, rather than that the subject never sent one.",
+          "description": "The envelope identity the frame carried before charpy rewrote or cut it, present only when what crossed does not carry the same one. Tells a reader that the frame existed and charpy replaced it: for an answer, that the subject answered; for a request, that the subject was never asked.",
           "required": ["id", "id_type"],
           "properties": {
             "id": { "type": "string" },
-            "id_type": { "enum": ["number", "string", "null"] }
+            "id_type": { "enum": ["number", "string", "null"] },
+            "kind": {
+              "enum": ["request", "response", "error", "notification"],
+              "description": "What the replaced frame was. Absent in transcripts written before it was recorded, which replaced only answers."
+            }
           },
           "additionalProperties": false
         }

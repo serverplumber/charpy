@@ -12,8 +12,12 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/serverplumber/charpy/internal/clock"
+	"github.com/serverplumber/charpy/internal/driver/drivertest"
 	"github.com/serverplumber/charpy/internal/driver/proxy"
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/oracle"
+	"github.com/serverplumber/charpy/internal/oracle/invariant"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
@@ -37,6 +41,7 @@ func subject(t *testing.T) string {
 
 type run struct {
 	lines []map[string]any
+	raw   string
 }
 
 func (r run) ofType(kind string) []map[string]any {
@@ -107,7 +112,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 		t.Fatalf("transcript: %v", err)
 	}
 
-	return run{lines: decode(t, buf.String())}
+	return run{lines: decode(t, buf.String()), raw: buf.String()}
 }
 
 func decode(t *testing.T, s string) []map[string]any {
@@ -186,10 +191,32 @@ func TestATruncationCutsARealEventStream(t *testing.T) {
 	for _, l := range r.ofType("frame") {
 		if l["fault"] != nil && l["kind"] == "malformed" {
 			malformed = true
+			// The remnant parses to no id, so the attribution is the only
+			// record of which answer it was.
+			f, _ := l["fault"].(map[string]any)
+			if rep, _ := f["replaced"].(map[string]any); rep["id"] == nil || rep["kind"] != "response" {
+				t.Errorf("the cut frame does not name the answer it replaced: %v", l["fault"])
+			}
 		}
 	}
 	if !malformed {
 		t.Error("no truncated frame reached the transcript")
+	}
+
+	// And so the oracle does not file charpy's cut against the subject. The
+	// server answered the call; charpy cut the answer short. Reporting the id
+	// as never answered is the finding that would have gone into somebody
+	// else's tracker.
+	for _, f := range invariant.Check(drivertest.Read(t, r.raw)).Findings {
+		if f.Check != "id-resolves-once" {
+			continue
+		}
+		if f.Verdict == oracle.Observed {
+			t.Errorf("charpy's truncation was reported against the subject: %s", f.Summary)
+		}
+		if f.Verdict == oracle.Inconclusive && f.Reason != "charpy-replaced-the-answer" {
+			t.Errorf("reason = %q, want charpy-replaced-the-answer", f.Reason)
+		}
 	}
 
 	// then=close: charpy ended the client's stream, recorded as its own close.
@@ -250,15 +277,130 @@ func TestAnEventBoundaryCutDeliversAWholeEvent(t *testing.T) {
 	if len(r.events(string(transcript.FaultApplied))) == 0 {
 		t.Fatal("the event_boundary cut never fired")
 	}
-	// The delivered event is well formed: a response frame, not a malformed
-	// remnant.
-	var wellFormed bool
+	// The delivered event is the subject's answer, whole and untouched, so it
+	// carries no attribution: marking it would drop the subject's real answer
+	// from every layer's evidence. The fault is the close after it, which
+	// fault_applied and charpy's own stream_close record.
+	var answers int
 	for _, l := range r.ofType("frame") {
-		if l["fault"] != nil && l["kind"] == "response" {
-			wellFormed = true
+		if l["direction"] != string(transcript.S2C) || l["method"] != "tools/call" {
+			continue
+		}
+		answers++
+		if l["kind"] != "response" {
+			t.Errorf("the delivered event is %v, not a whole response", l["kind"])
+		}
+		if l["fault"] != nil {
+			t.Errorf("an untouched answer carries an attribution: %v", l["fault"])
 		}
 	}
-	if !wellFormed {
+	if answers == 0 {
 		t.Error("event_boundary should deliver a whole, well-formed event")
+	}
+	var closed bool
+	for _, l := range r.events(string(transcript.StreamClose)) {
+		if d, _ := l["detail"].(map[string]any); d["reason"] == string(transcript.CharpyClose) {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Error("the close that is the fault was not recorded as charpy's")
+	}
+}
+
+// After the fault acts, charpy's peer asks the subject one more question on
+// the same session, and the subject's answer crosses back untouched.
+//
+// The case matches every response, with no method and occurrence_every = 1,
+// so it would fault the follow-up's answer too if the matcher saw it. The fault here
+// reaches charpy's peer rather than the server, so the reaction layer rightly
+// skips it; what this pins is that the question is asked and comes back clean,
+// which is the driver's half whoever the fault was put to.
+func TestAFollowUpIsAskedOnTheSameSession(t *testing.T) {
+	c := interpose.Case{
+		ID:       "id/unsolicited-after-response",
+		Citation: "id/unsolicited-after-response@2025-11-25#seed=8f2c1a",
+		Match:    interpose.Match{Direction: transcript.S2C, Kind: "response", Every: 1},
+		Fault:    interpose.Fault{Kind: "unsolicited_response", Params: map[string]any{"id_source": "never_used"}},
+	}
+	r := script(t, c, revision.V20251125)
+
+	q, _ := drivertest.FollowUpAnswered(t, drivertest.Read(t, r.raw))
+	if q.MethodName() != "ping" {
+		t.Errorf("follow-up was %q, want ping at %s", q.MethodName(), revision.V20251125)
+	}
+}
+
+// A server subject receives c2s, so that is where its questions are put. A
+// request corrupted on its way to a real HTTP server crosses without its id,
+// the attribution says it was a request, and fault_applied says which way it
+// went. The server survives it, and answers the question after the fault.
+func TestAMalformedRequestIsPutToTheServer(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:       "frame/malformed-request",
+		Citation: "frame/malformed-request@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Direction: transcript.C2S, Kind: "request",
+		},
+		Fault: interpose.Fault{Kind: "malformed_json"},
+	}, revision.V20251125)
+	tr := drivertest.Read(t, r.raw)
+
+	var destroyed bool
+	for _, f := range tr.Frames() {
+		if f.Direction == transcript.C2S && f.Fault != nil && f.Fault.Replaced != nil &&
+			f.Fault.Replaced.Kind == envelope.KindRequest {
+			destroyed = true
+		}
+	}
+	if !destroyed {
+		t.Fatal("no corrupted request reached the transcript")
+	}
+	applied := tr.Events(transcript.FaultApplied)
+	if len(applied) != 1 {
+		t.Fatalf("fault_applied %d times, want once", len(applied))
+	}
+	if d, _ := applied[0].AppliedDirection(); d != transcript.C2S {
+		t.Errorf("fault_applied direction = %q, want c2s", d)
+	}
+	drivertest.FollowUpAnswered(t, tr)
+	drivertest.ReactionAnswered(t, tr)
+}
+
+// A frame charpy synthesizes beside a request goes to the subject as a request
+// of its own. A duplicate sent while the original is in flight puts the same
+// id to the server twice at once; the copy is charpy's, the original is not.
+func TestADuplicateRequestIsSentBesideTheOriginal(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:       "id/duplicate-request-inflight",
+		Citation: "id/duplicate-request-inflight@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Direction: transcript.C2S, Kind: "request",
+		},
+		Fault: interpose.Fault{Kind: "duplicate_id", Params: map[string]any{"mode": "concurrent_request"}},
+	}, revision.V20251125)
+	tr := drivertest.Read(t, r.raw)
+
+	byID := map[string][]*transcript.FrameLine{}
+	for _, f := range tr.Frames() {
+		if f.Direction == transcript.C2S && f.MethodName() == "tools/call" {
+			byID[f.Key()] = append(byID[f.Key()], f)
+		}
+	}
+	var twice bool
+	for id, fs := range byID {
+		if len(fs) != 2 {
+			continue
+		}
+		twice = true
+		if fs[0].Tampered() == fs[1].Tampered() {
+			t.Errorf("id %s: want the original untouched and only the copy charpy's", id)
+		}
+	}
+	if !twice {
+		t.Fatalf("no tools/call id was sent twice: %v", byID)
+	}
+	if d, _ := tr.Events(transcript.FaultApplied)[0].AppliedDirection(); d != transcript.C2S {
+		t.Errorf("fault_applied direction = %q, want c2s", d)
 	}
 }

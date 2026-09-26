@@ -49,7 +49,7 @@ func (v Verdict) Passed() bool { return v == Observed }
 type Finding struct {
 	Verdict Verdict
 	// Layer names which of the four produced this: schema, invariant,
-	// differential or liveness.
+	// differential or reaction.
 	Layer string
 	// Check is the invariant name, or the subschema path for a MUST.
 	Check string
@@ -106,6 +106,26 @@ func (r *Report) Violations() (must, observed int) {
 		}
 	}
 	return must, observed
+}
+
+// SubjectReceives reports whether a frame travelling dir across face is one
+// the subject receives rather than sends. A fault on such a frame is a
+// question put to the subject; a fault on any other is put to charpy's own
+// peer, and nothing the subject does afterwards answers it
+// (docs/design/decisions.md ADR-013).
+func SubjectReceives(class transcript.Class, face transcript.Face, dir transcript.Direction) bool {
+	switch class {
+	case transcript.ClassServer:
+		return dir == transcript.C2S
+	case transcript.ClassClient:
+		return dir == transcript.S2C
+	case transcript.ClassGateway:
+		// Mirror of SubjectOriginated: what arrives on either side of itself.
+		return (face == transcript.Upstream && dir == transcript.S2C) ||
+			(face == transcript.Downstream && dir == transcript.C2S)
+	default:
+		return false
+	}
 }
 
 // SubjectOriginated reports whether a frame came from the subject rather than

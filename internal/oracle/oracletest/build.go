@@ -80,6 +80,20 @@ func (b *Builder) Raw(dir transcript.Direction, raw string, fault *transcript.Fa
 	return b
 }
 
+// RawHTTP is Raw over HTTP, with the status the frame's response carried.
+func (b *Builder) RawHTTP(dir transcript.Direction, raw string, status int) *Builder {
+	b.t.Helper()
+	m, _ := envelope.Parse([]byte(raw))
+	b.w.Frame(transcript.Frame{
+		Face: b.face, Direction: dir, Transport: transcript.TransportHTTP,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Message: m, Revision: revision.V20251125,
+		Link: transcript.Link{Via: transcript.ViaNone},
+		HTTP: &transcript.HTTP{Status: status},
+	})
+	return b
+}
+
 // ToSubject writes a frame travelling toward the subject.
 func (b *Builder) ToSubject(raw string) *Builder {
 	return b.Raw(b.dirToSubject(), raw, nil)
@@ -124,6 +138,39 @@ func (b *Builder) dirFromSubject() transcript.Direction {
 		return transcript.C2S
 	}
 	return transcript.S2C
+}
+
+// FaultToSubject records a case's fault taking effect on a frame the subject
+// receives: the question the reaction layer judges its answer to.
+func (b *Builder) FaultToSubject() *Builder { return b.applied(b.dirToSubject()) }
+
+// FaultToCharpy records a fault on a frame the subject sent, which lands on
+// charpy's own peer and puts no question to the subject at all.
+func (b *Builder) FaultToCharpy() *Builder { return b.applied(b.dirFromSubject()) }
+
+func (b *Builder) applied(dir transcript.Direction) *Builder {
+	b.w.Event(transcript.Event{
+		Kind: transcript.FaultApplied, Face: b.face, Transport: transcript.TransportStdio,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Detail: transcript.AppliedDetail("rewrite", dir),
+		Fault: &transcript.Fault{
+			CaseID:   "frame/malformed-request",
+			Citation: "frame/malformed-request@2025-11-25#seed=8f2c1a",
+			Kind:     "malformed_json",
+		},
+	})
+	return b
+}
+
+// SubjectKilled records charpy ending the subject at the close of a run,
+// which is charpy's doing and not a subject that went away.
+func (b *Builder) SubjectKilled() *Builder {
+	b.w.Event(transcript.Event{
+		Kind: transcript.SubjectExit, Face: b.face, Transport: transcript.TransportStdio,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Detail: map[string]any{"exit_code": -1, "killed_by_charpy": true},
+	})
+	return b
 }
 
 // SubjectExit records the subject going away.

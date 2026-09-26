@@ -14,6 +14,10 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/serverplumber/charpy/internal/driver/drivertest"
+	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/transcript"
 )
 
 // The subject: a conforming MCP server over stdio, re-exec'd from this test
@@ -110,9 +114,9 @@ func TestRunCaseGlobWritesOneTranscriptPerCase(t *testing.T) {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
 	}
 
-	// The three the catalogue applies to a server over stdio on this revision:
-	// stream/truncate-mid-line, frame/malformed-unbalanced and
-	// schema/output-schema-violated. A fourth would belong here rather than
+	// The three the catalogue puts to a server over stdio on this revision:
+	// frame/malformed-request, id/duplicate-request-inflight and
+	// id/unsolicited-to-server. A fourth would belong here rather than
 	// silently widening the glob.
 	files := transcripts(t, dir)
 	if len(files) != 3 {
@@ -150,9 +154,7 @@ func TestRunCaseGlobWritesOneTranscriptPerCase(t *testing.T) {
 
 // A single case is a single run, and the fault it declares actually fires.
 func TestRunASingleCaseInjectsIt(t *testing.T) {
-	// The cut stalls the handshake, so the peer waits out the deadline: a
-	// short one keeps the case without paying thirty seconds for it.
-	out, dir, code := runCLI(t, "--case", "stream/truncate-mid-line",
+	out, dir, code := runCLI(t, "--case", "frame/malformed-request",
 		"--revision", "2025-11-25", "--seed", "8f2c1a", "--timeout", "2s")
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
@@ -172,7 +174,7 @@ func TestRunASingleCaseInjectsIt(t *testing.T) {
 
 	// The run line quotes the citation, not the bare id: a bug report needs
 	// the revision and the seed to be reproducible from.
-	if !strings.Contains(out, "stream/truncate-mid-line@2025-11-25#seed=8f2c1a") {
+	if !strings.Contains(out, "frame/malformed-request@2025-11-25#seed=8f2c1a") {
 		t.Errorf("output does not quote the citation:\n%s", out)
 	}
 }
@@ -195,7 +197,7 @@ func TestRunRefusesACaseGlobThatMatchesNothing(t *testing.T) {
 func TestRunRefusesAMalformedSeed(t *testing.T) {
 	for _, s := range []string{"1", "8f2c1", "8F2C1A", "8f2c1g", "8f2c1a8f2c1a8f2c1"} {
 		t.Run(s, func(t *testing.T) {
-			out, dir, code := runCLI(t, "--case", "stream/truncate-mid-line",
+			out, dir, code := runCLI(t, "--case", "frame/malformed-request",
 				"--revision", "2025-11-25", "--seed", s)
 			if code != exitHarness {
 				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
@@ -214,7 +216,7 @@ func TestRunRefusesAMalformedSeed(t *testing.T) {
 // says otherwise, which is fine against a fixture and not against a subject
 // whose first tool does something.
 func TestRunPinsTheToolAndItsArguments(t *testing.T) {
-	out, dir, code := runCLI(t, "--case", "schema/output-schema-violated", "--revision", "2025-11-25",
+	out, dir, code := runCLI(t, "--case", "id/unsolicited-to-server", "--revision", "2025-11-25",
 		"--seed", "8f2c1a", "--tool", "nosuch", "--args", `{"x":1}`)
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
@@ -267,7 +269,7 @@ func rawFrames(t *testing.T, path string) string {
 func TestRunRefusesMalformedToolArguments(t *testing.T) {
 	for _, args := range []string{"{", `["x"]`, "3"} {
 		t.Run(args, func(t *testing.T) {
-			out, dir, code := runCLI(t, "--case", "stream/truncate-mid-line",
+			out, dir, code := runCLI(t, "--case", "frame/malformed-request",
 				"--revision", "2025-11-25", "--tool", "echo", "--args", args)
 			if code != exitHarness {
 				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
@@ -294,7 +296,7 @@ func TestRunRefusesToolWithoutACase(t *testing.T) {
 // charpy speaks first under owned stimulus, so it has to choose an era.
 // "auto" is for watching somebody else's handshake.
 func TestRunRefusesAutoRevisionWithACase(t *testing.T) {
-	out, _, code := runCLI(t, "--case", "stream/truncate-mid-line")
+	out, _, code := runCLI(t, "--case", "frame/malformed-request")
 	if code != exitHarness {
 		t.Errorf("exit %d, want %d\n%s", code, exitHarness, out)
 	}
@@ -338,18 +340,21 @@ func runHTTP(t *testing.T, url string, args ...string) (string, string, int) {
 }
 
 // The proxy driver from the command line: charpy proxies a running HTTP
-// subject, one case per run, and the two HTTP cases both fire.
+// subject, one case per run, and every case it puts to an HTTP server fires.
 func TestRunSubjectURLProxiesAndFaults(t *testing.T) {
 	out, dir, code := runHTTP(t, httpSubject(t),
-		"--case", "stream/truncate-*", "--revision", "2025-11-25", "--seed", "8f2c1a")
+		"--case", "*", "--revision", "2025-11-25", "--seed", "8f2c1a", "--timeout", "5s")
 	if code != exitClean {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
 	}
 	files := transcripts(t, dir)
-	// Both HTTP truncate cases apply; the stdio-only mid_line one does not and
-	// is dropped at selection rather than armed to never fire.
-	if len(files) != 2 {
-		t.Fatalf("wrote %d transcripts, want 2 HTTP cases\n%s", len(files), out)
+	// The four cases put to a server over HTTP: frame/malformed-request-body,
+	// stream/truncate-request-body, id/duplicate-request-inflight and
+	// id/unsolicited-to-server. The stdio-only frame/malformed-request, and
+	// every case put to a client, are dropped at selection rather than armed
+	// to never fire.
+	if len(files) != 4 {
+		t.Fatalf("wrote %d transcripts, want 4 HTTP server cases\n%s", len(files), out)
 	}
 	for _, f := range files {
 		body, err := os.ReadFile(f)
@@ -433,9 +438,95 @@ func TestRunHostileRefusesAGlobMatchingNoClientCase(t *testing.T) {
 	var out bytes.Buffer
 	stderr := captureStderr(t, &out)
 	// stream/truncate-mid-event is server/gateway + http; no client subject.
-	code := cmdRun([]string{"--out", dir, "--hostile", "--revision", "2025-11-25", "--case", "stream/truncate-mid-event"}, &out)
+	code := cmdRun([]string{"--out", dir, "--hostile", "--revision", "2025-11-25", "--case", "frame/malformed-request"}, &out)
 	stderr()
 	if code != exitHarness {
 		t.Errorf("exit %d, want %d\n%s", code, exitHarness, out.String())
+	}
+}
+
+// A shipped case run end to end asks the subject one more question once its
+// fault has acted, on the same session, and the subject's answer crosses back
+// clean. The corrupted request never reaches the server as a request, charpy
+// answers its own peer so the session survives, and the server is asked again
+// -- which is the answer the reaction layer judges.
+func TestRunAsksAFollowUpAfterTheFault(t *testing.T) {
+	out, dir, code := runHTTP(t, httpSubject(t), "--case", "frame/malformed-request-body",
+		"--revision", "2025-11-25", "--seed", "8f2c1a", "--tool", "echo", "--timeout", "5s")
+	if code != exitClean {
+		t.Fatalf("exit %d, want 0\n%s", code, out)
+	}
+	files := transcripts(t, dir)
+	if len(files) != 1 {
+		t.Fatalf("wrote %d transcripts, want 1\n%s", len(files), out)
+	}
+	body, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := drivertest.Read(t, string(body))
+	q, _ := drivertest.FollowUpAnswered(t, tr)
+	if q.MethodName() != "ping" {
+		t.Errorf("follow-up was %q, want ping at 2025-11-25", q.MethodName())
+	}
+	drivertest.ReactionAnswered(t, tr)
+}
+
+// An auto run compiles each case once per revision the handshake could settle
+// on, cited against that revision, and arms nothing up front. A case whose
+// range excludes a revision is not among that revision's cases: the old
+// selection armed the union and cited everything against the oldest revision
+// it allowed, so a reproduction from the citation spoke the wrong era.
+func TestAutoCompilesEachCaseForTheRevisionItWillBeCitedUnder(t *testing.T) {
+	cfg, code := runConfig("auto", "8f2c1a", "client", string(transcript.TransportStdio))
+	if code != exitClean {
+		t.Fatalf("runConfig exit %d", code)
+	}
+	if len(cfg.cases) != 0 {
+		t.Errorf("an auto run armed %d cases before the handshake", len(cfg.cases))
+	}
+
+	for _, r := range revision.All() {
+		for _, c := range cfg.byRevision[r] {
+			if want := "@" + string(r) + "#"; !strings.Contains(c.Citation, want) {
+				t.Errorf("under %s, %s is cited as %s", r, c.ID, c.Citation)
+			}
+		}
+	}
+
+	// schema/output-schema-violated applies from 2025-06-18: absent before,
+	// present from then on.
+	has := func(r revision.Revision) bool {
+		for _, c := range cfg.byRevision[r] {
+			if c.ID == "schema/output-schema-violated" {
+				return true
+			}
+		}
+		return false
+	}
+	if has(revision.V20241105) {
+		t.Error("a >=2025-06-18 case is armed for a 2024-11-05 handshake")
+	}
+	if !has(revision.V20251125) {
+		t.Error("a >=2025-06-18 case is missing for a 2025-11-25 handshake")
+	}
+}
+
+// A case whose answer nothing here can see is dropped at selection, and asking
+// for it by name says why, rather than that it does not apply. Whether a
+// client takes "7" for 7 leaves nothing on the wire; the differential is what
+// would see it, and it is not built.
+func TestRunNamesACaseNothingCanObserve(t *testing.T) {
+	dir := t.TempDir()
+	var out bytes.Buffer
+	stderr := captureStderr(t, &out)
+	code := cmdRun([]string{"--out", dir, "--hostile", "--revision", "2025-11-25",
+		"--case", "id/duplicate-response-vary-type"}, &out)
+	stderr()
+	if code != exitHarness {
+		t.Errorf("exit %d, want %d\n%s", code, exitHarness, out.String())
+	}
+	if !strings.Contains(out.String(), "its answer is seen by differential") {
+		t.Errorf("the refusal does not say what could see the answer:\n%s", out.String())
 	}
 }

@@ -75,6 +75,16 @@ This is a consequence of the conformance precondition (README, "Conformance firs
 resilience"): charpy's subject has already been shown correct under a correct sequence, so charpy
 observes to confirm or to fill a deliberate gap, not to discover the protocol from the traffic.
 
+**On `auto`, nothing is armed until the revision settles.** A relayed run watches somebody else's
+handshake rather than probing, and until the subject answers it charpy knows neither which cases
+apply nor which revision a citation would name. So each case is compiled once per revision
+beforehand, which surfaces a case that does not compile before the subject starts, and the set for
+the negotiated revision is armed when the handshake answer arrives. That answer is itself matched
+after settlement, so a case can still fault it. What crosses before it -- in practice the client's
+`initialize` request -- is relayed untouched: a fault charpy cannot cite correctly is one it should
+not inject. Arming the union up front instead cited every case against the oldest revision its
+range allowed, and fired cases the negotiated revision rules out.
+
 When it does run, the 2026-07-28 spec prescribes the detection algorithm, so implement that rather
 than inventing one.
 

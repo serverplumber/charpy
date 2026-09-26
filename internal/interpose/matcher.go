@@ -106,7 +106,12 @@ func (m Match) predicates(f Frame, now clock.Mono) bool {
 }
 
 // ordinal reports whether the nth matching frame is the one this case wants.
-// A match table with neither key selects every matching frame.
+//
+// A match table with neither key selects the first matching frame, not every
+// one. One fault is what a case means: a transcript carrying the same fault on
+// every frame that fits is a puzzle rather than a finding (ADR-012), and under
+// a relay, where charpy does not choose the traffic, "every" is a storm. A case
+// that does want each frame says so, with occurrence_every = 1.
 func (m Match) ordinal(n int64) bool {
 	switch {
 	case m.Occurrence > 0:
@@ -114,6 +119,6 @@ func (m Match) ordinal(n int64) bool {
 	case m.Every > 0:
 		return n%m.Every == 0
 	default:
-		return true
+		return n == 1
 	}
 }

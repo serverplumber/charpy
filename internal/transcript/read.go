@@ -185,6 +185,18 @@ func (f *FrameLine) Key() string {
 	return string(f.IDType) + ":" + text
 }
 
+// AppliedDirection returns the direction a fault_applied event records for
+// the frame its fault acted on, and whether it records one. Transcripts
+// written before ADR-013 do not, and a reader must not guess: the direction is
+// what says who the fault was put to.
+func (e *EventLine) AppliedDirection() (Direction, bool) {
+	d, ok := e.Detail["direction"].(string)
+	if !ok || d == "" {
+		return "", false
+	}
+	return Direction(d), true
+}
+
 // Tampered reports whether charpy corrupted this frame. Such a frame cannot be
 // held against the subject, so the layers that judge exclude it.
 func (f *FrameLine) Tampered() bool { return f.Fault != nil }

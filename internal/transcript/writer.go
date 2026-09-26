@@ -126,6 +126,11 @@ type Fault struct {
 	// without this the oracle sees an outstanding request and blames the
 	// subject for charpy's own doing. Absent when the rewrite kept the id.
 	Replaced envelope.ID
+	// ReplacedKind is what the replaced frame was. A request charpy destroyed
+	// and an answer charpy destroyed owe the oracle different things: the
+	// first means the subject was never asked, the second that it answered
+	// and charpy hid the answer.
+	ReplacedKind envelope.Kind
 }
 
 // Session is the protocol-level session, which exists only through
@@ -184,6 +189,15 @@ type Event struct {
 // CloseDetail builds the detail a stream_close event must carry.
 func CloseDetail(reason CloseReason, bytesWritten int) map[string]any {
 	return map[string]any{"reason": string(reason), "bytes_written": bytesWritten}
+}
+
+// AppliedDetail builds the detail a fault_applied event must carry. The
+// direction is the way the frame the fault acted on was travelling, which
+// names the fault's recipient: a damaged frame is a question put to whoever
+// receives it, and the reaction layer judges that party
+// (docs/design/decisions.md ADR-013).
+func AppliedDetail(verb string, dir Direction) map[string]any {
+	return map[string]any{"verb": verb, "direction": string(dir)}
 }
 
 // ProbeDetail builds the detail a probe event must carry. Liveness is

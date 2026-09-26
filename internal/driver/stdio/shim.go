@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/serverplumber/charpy/internal/clock"
@@ -16,6 +17,7 @@ import (
 	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/fault"
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 	"github.com/serverplumber/charpy/internal/wire"
 )
@@ -40,7 +42,23 @@ type Options struct {
 	// says what went wrong.
 	Errs io.Writer
 
-	Cases      []interpose.Case
+	Cases []interpose.Case
+	// Arm, instead of Cases, defers arming until the subject's handshake
+	// settles the revision, and is asked for the cases compiled against it.
+	// Frames before that cross unfaulted: until the server answers, charpy
+	// does not know which cases apply or which revision a citation would
+	// name, and a fault it could not cite correctly is one it should not
+	// inject.
+	Arm func(revision.Revision) []interpose.Case
+
+	// AnswerDestroyed has charpy answer its own peer when a fault leaves the
+	// peer's request without the id it carried. The subject never received
+	// that request, so it will never answer it, and a peer left waiting on it
+	// sits out the script's deadline and never asks the question after the
+	// fault that the reaction layer judges. Owned stimulus only: under a relay
+	// the client is somebody else's, and how it copes is its own business.
+	AnswerDestroyed bool
+
 	Transcript *transcript.Writer
 	// Sched is charpy's own scheduling clock -- when a withheld frame is
 	// released. A relayed run passes a real one: there is no run loop to
@@ -77,18 +95,38 @@ type Shim struct {
 	o     Options
 	x     *exchange.Conn
 	inter *interpose.Interposer
-	match *interpose.Matcher
+	// peerMu serialises what is written toward the other peer. Its answers
+	// arrive from the subject's relay, and an answer to a request charpy
+	// destroyed is written from the other one.
+	peerMu sync.Mutex
+
+	// match is swapped once, when an Arm run settles, from the goroutine
+	// relaying the handshake answer while the other relay reads it.
+	match atomic.Pointer[interpose.Matcher]
 
 	cmd     *exec.Cmd
 	toSubj  *wire.Stdio
 	toPeer  *wire.Stdio
 	subjOut io.Reader
+
+	// faulting is held while a fault is being applied, up to and including
+	// its fault_applied line, so that [Shim.Askable] cannot answer while one
+	// is half done. The faulted frame is delivered before that line is
+	// written, so the peer can see the fault and move on before the shim has
+	// recorded it; without the lock, a follow-up asked in that gap would
+	// cross before the fault it follows.
+	faulting sync.Mutex
+	applied  int
+	broken   bool
 }
 
 // New prepares a shim. Nothing is spawned until Run.
 func New(o Options) (*Shim, error) {
 	if len(o.Command) == 0 {
 		return nil, errors.New("stdio: no subject command")
+	}
+	if o.Arm != nil && len(o.Cases) > 0 {
+		return nil, errors.New("stdio: Cases and Arm both set; a run arms once")
 	}
 	if o.Face == "" {
 		o.Face = transcript.Downstream
@@ -110,12 +148,20 @@ func New(o Options) (*Shim, error) {
 		// forwarded id would be a join to nothing.
 		Link: func() transcript.Link { return transcript.Link{Via: transcript.ViaNone} },
 	}
-	return &Shim{
+	s := &Shim{
 		o:     o,
 		x:     core.Conn(o.ClientID, o.SessionID, o.ConnID),
 		inter: interpose.New(o.Ledger, o.Sched),
-		match: interpose.NewMatcher(o.Ledger, o.Cases...),
-	}, nil
+	}
+	s.match.Store(interpose.NewMatcher(o.Ledger, o.Cases...))
+	if o.Arm != nil {
+		core.Settle = func(r revision.Revision) []interpose.Case {
+			cases := o.Arm(r)
+			s.match.Store(interpose.NewMatcher(o.Ledger, cases...))
+			return cases
+		}
+	}
+	return s, nil
 }
 
 // Run spawns the subject and relays until the context is cancelled or either
@@ -154,6 +200,13 @@ func (s *Shim) Run(ctx context.Context) error {
 	go func() {
 		defer wg.Done()
 		s.relay(s.subjOut, s.toPeer, transcript.S2C)
+		// The subject stopped talking -- it exited, or closed its output. Let
+		// the peer see the end of its input too: a request it is waiting on
+		// will never be answered, and a peer left waiting sits out its whole
+		// deadline to learn what the pipe already says.
+		s.peerMu.Lock()
+		_ = s.toPeer.Close()
+		s.peerMu.Unlock()
 	}()
 
 	wg.Wait()
@@ -250,7 +303,11 @@ func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
 		prior, _ := s.x.PriorResolved()
 		s.x.Observe(m, dir)
 
-		if cases := s.match.Select(s.x.FrameOf(m, dir)); len(cases) > 0 {
+		if s.x.FollowUp(m, dir) {
+			s.deliver(m, dir, to, nil)
+			continue
+		}
+		if cases := s.match.Load().Select(s.x.FrameOf(m, dir)); len(cases) > 0 {
 			// A frame may match several cases. Arbitrating between two
 			// faults that want the same frame is not the matcher's job
 			// and is not obviously charpy's either, so the first wins and
@@ -263,8 +320,33 @@ func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
 	}
 }
 
+// Askable reports whether a follow-up question can be put to the subject on
+// this connection: a fault has acted, and charpy did not end or stall the
+// stream in doing it. A closed or stalled pipe has no session left to ask on,
+// and the fresh-session recovery probe is what covers that case.
+func (s *Shim) Askable() bool {
+	s.faulting.Lock()
+	defer s.faulting.Unlock()
+	return s.applied > 0 && !s.broken
+}
+
+// Ask marks the next request crossing toward the subject as charpy's
+// follow-up, keeping it and its answer out of the armed case's reach. The
+// returned func withdraws the mark if the question never crossed.
+func (s *Shim) Ask() (withdraw func()) { return s.x.Ask(transcript.C2S) }
+
 // applyFault carries out a plan.
 func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.Direction, to *wire.Stdio, prior envelope.ID) {
+	s.faulting.Lock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			s.faulting.Unlock()
+		}
+	}
+	defer unlock()
+
 	s.x.FaultEvent(transcript.FaultScheduled, c, nil)
 
 	plan, err := fault.Apply(c, m, fault.Context{RunSeed: s.o.RunSeed, Resolved: prior})
@@ -293,7 +375,7 @@ func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.D
 		go s.release(held, plan.Hold, dir, to, att)
 	case plan.Deliver != nil:
 		s.inter.Rewrite(f, c, m, *plan.Deliver)
-		s.deliverCut(*plan.Deliver, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
+		s.deliverCut(*plan.Deliver, &m, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
 	}
 
 	for _, extra := range plan.After {
@@ -301,7 +383,14 @@ func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.D
 		s.deliver(extra, dir, to, att)
 	}
 
-	s.x.FaultEvent(transcript.FaultApplied, c, map[string]any{"verb": string(plan.Verb())})
+	s.x.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(plan.Verb()), dir))
+	s.applied++
+	if plan.Then == fault.StreamClose || plan.Then == fault.StreamStall {
+		s.broken = true
+	}
+	// A stall blocks here for as long as it lasts, and Askable must not wait
+	// on it: the fault is recorded, which is all the lock protects.
+	unlock()
 
 	switch plan.Then {
 	case fault.StreamClose:
@@ -335,6 +424,9 @@ func (s *Shim) release(held *interpose.Withheld, hold *fault.Hold, dir transcrip
 	case "deliver":
 		s.deliver(held.Message(), dir, to, att)
 	case "close":
+		s.faulting.Lock()
+		s.broken = true
+		s.faulting.Unlock()
 		s.x.StreamClose(transcript.CharpyClose, int(to.Written()))
 		_ = to.Close()
 	case "error":
@@ -350,10 +442,10 @@ func (s *Shim) release(held *interpose.Withheld, hold *fault.Hold, dir transcrip
 }
 
 func (s *Shim) deliver(m envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault) {
-	s.deliverCut(m, dir, to, att, nil)
+	s.deliverCut(m, nil, dir, to, att, nil)
 }
 
-func (s *Shim) deliverCut(m envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault, cut *fault.Cut) {
+func (s *Shim) deliverCut(m envelope.Message, orig *envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault, cut *fault.Cut) {
 	enc := wire.EncodeLine(m.Raw())
 
 	n := enc.Len()
@@ -367,10 +459,10 @@ func (s *Shim) deliverCut(m envelope.Message, dir transcript.Direction, to *wire
 			n = at
 		}
 	}
-
-	written, err := wire.EmitCut(to, enc, n)
-	if err != nil {
-		s.x.Note(fmt.Sprintf("write failed after %d bytes: %v", written, err))
+	// orig is the frame the case matched, as the subject or the peer wrote
+	// it; a synthesized frame has none, and stays charpy's whatever crossed.
+	if orig != nil {
+		att = interpose.Crossed(att, *orig, m, enc.Bytes[:n], n == enc.Len())
 	}
 
 	// Both directions cross the subject's one face here: charpy sends to it
@@ -378,5 +470,65 @@ func (s *Shim) deliverCut(m envelope.Message, dir transcript.Direction, to *wire
 	// same frames rather than different ones. A two-faced subject -- a
 	// gateway -- is what would make this a question, and that is the proxy
 	// driver's problem rather than the shim's.
+	//
+	// It is recorded before it is written, not after. Once the bytes are out
+	// the other peer can answer them, and its answer, relayed the other way,
+	// would otherwise be free to take the earlier seq -- an answer before its
+	// question, which the reaction layer would read as a request never
+	// answered. The bytes recorded are the same either way: n is settled
+	// before the write, and a short write is noted rather than re-recorded.
+	if to == s.toPeer {
+		s.peerMu.Lock()
+	}
 	s.x.Frame(dir, enc.Bytes[:n], att, nil)
+	written, err := wire.EmitCut(to, enc, n)
+	if to == s.toPeer {
+		s.peerMu.Unlock()
+	}
+	if err != nil {
+		s.x.Note(fmt.Sprintf("write failed after %d bytes: %v", written, err))
+	}
+
+	if orig != nil && to == s.toSubj {
+		s.answerDestroyed(*orig, dir, att)
+	}
 }
+
+// answerDestroyed answers the peer's request itself when the fault left the
+// request without its id, so the peer can go on to ask the next question.
+//
+// The answer is charpy's and is attributed to the case, so no layer reads it
+// as the subject's: the subject never saw the request it answers. It is an
+// error rather than a result because nothing answered the question, and its
+// message says so for whoever reads the transcript.
+func (s *Shim) answerDestroyed(req envelope.Message, dir transcript.Direction, att *transcript.Fault) {
+	if !s.o.AnswerDestroyed || att == nil || req.Kind != envelope.KindRequest ||
+		!att.Replaced.Present() || att.ReplacedKind != envelope.KindRequest {
+		return
+	}
+	back := transcript.S2C
+	if dir == transcript.S2C {
+		back = transcript.C2S
+	}
+	ans, err := envelope.NewError(req.ID, destroyedCode,
+		"charpy destroyed this request in transit ("+att.Citation+"); the subject never received it", nil)
+	if err != nil {
+		s.x.Note(fmt.Sprintf("answering a destroyed request: %v", err))
+		return
+	}
+	s.x.Observe(ans, back)
+	s.deliver(ans, back, s.toPeer, charpys(att))
+}
+
+// charpys is the case's attribution for a frame charpy wrote in its own
+// right: it replaced nothing, so it names nothing it replaced.
+func charpys(att *transcript.Fault) *transcript.Fault {
+	out := *att
+	out.Replaced, out.ReplacedKind = envelope.ID{}, ""
+	return &out
+}
+
+// destroyedCode is the JSON-RPC error charpy answers its own peer with for a
+// request it destroyed: implementation-defined server-error range, and not one
+// MCP assigns.
+const destroyedCode = -32099

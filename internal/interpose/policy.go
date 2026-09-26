@@ -59,7 +59,8 @@ type Match struct {
 
 	// Occurrence is a 1-based ordinal over matching frames; Every selects
 	// each Nth. They are mutually exclusive and the loader enforces it. Zero
-	// means unset for both.
+	// means unset for both, and a case with neither selects the first
+	// matching frame.
 	Occurrence int64
 	Every      int64
 

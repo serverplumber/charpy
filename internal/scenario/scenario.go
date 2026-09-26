@@ -94,7 +94,10 @@ func Basic(m interpose.Match, o Options) (Scenario, error) {
 		if tool == "" {
 			listed, err := sess.ListTools(ctx, nil)
 			if err != nil {
-				return halted(ctx, fmt.Errorf("scenario: listing tools: %w", err))
+				// The same as a call below: a wire that broke under the
+				// listing, because a fault took the subject down before the
+				// script reached its call, is the fault working.
+				return halted(ctx, fmt.Errorf("%w: listing tools: %v", ErrStimulusInterrupted, err))
 			}
 			if len(listed.Tools) == 0 {
 				return errors.New("scenario: the subject lists no tools to call")
@@ -150,6 +153,49 @@ func Probe(ctx context.Context, sess *mcp.ClientSession, era revision.Revision) 
 		_, err = sess.ListTools(ctx, nil)
 	}
 	return ProbeResult{Method: method, Outcome: Classify(ctx, err), Elapsed: time.Since(start)}
+}
+
+// FollowUp puts one question to the subject on the session a fault acted on,
+// so the reaction layer has something to judge: without it, a fault that
+// lands on the script's last exchange is followed by nothing, and the honest
+// result is nothing-asked-after-fault (docs/design/oracle.md section 6).
+//
+// The question is the liveness probe's, chosen by the era the session
+// actually negotiated rather than the one charpy asked for -- an empty ask
+// takes the SDK's latest, and the method has to exist in the revision the
+// subject is speaking. It is not a second recovery probe: this one asks on the
+// same session, where the probe deliberately opens a fresh one.
+//
+// Its outcome is returned for the caller to ignore. A subject that does not
+// answer is the finding, and the transcript already carries the unanswered
+// request; the caller bounds ctx with the script's deadline, so a silent
+// subject ends the run the way any other stopped answer does.
+//
+// Under 2026-07-28 the SDK serves tools/list from its own cache while a
+// previous result's ttlMs is live, and then nothing crosses the wire. That is
+// the reference peer being correct, and the reaction layer reports it as
+// nothing asked rather than as an answer.
+func FollowUp(ctx context.Context, sess *mcp.ClientSession) ProbeResult {
+	var era revision.Revision
+	if res := sess.InitializeResult(); res != nil {
+		era = revision.Revision(res.ProtocolVersion)
+	}
+	return Probe(ctx, sess, era)
+}
+
+// Askable reports whether a script ended in a way that leaves a follow-up
+// question worth asking: it ran to its last step, or a call broke under a
+// fault and the session may still be standing. A halted script has no time
+// left to ask in -- the deadline already fired, or the run is stopping -- and
+// a script that failed outright is not a run whose reaction means anything.
+//
+// Whether a fault acted, and left a session to ask on, is the driver's to
+// say; this is only the script's half.
+func Askable(ctx context.Context, scriptErr error) bool {
+	if Why(ctx) != nil {
+		return false
+	}
+	return scriptErr == nil || errors.Is(scriptErr, ErrStimulusInterrupted)
 }
 
 // ProbeMethod is the liveness probe for an era: ping through 2025-11-25,

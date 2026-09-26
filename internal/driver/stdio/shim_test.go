@@ -10,14 +10,18 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/serverplumber/charpy/internal/clock"
+	"github.com/serverplumber/charpy/internal/driver/drivertest"
 	"github.com/serverplumber/charpy/internal/driver/stdio"
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/oracle"
+	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -100,6 +104,7 @@ func subjectCommand() []string {
 
 type run struct {
 	lines   []map[string]any
+	raw     string
 	toPeer  string
 	subjErr string
 }
@@ -107,6 +112,13 @@ type run struct {
 // drive relays the given client frames through a shim and returns everything
 // the run produced.
 func drive(t *testing.T, cases []interpose.Case, clientFrames ...string) run {
+	t.Helper()
+	return driveWith(t, func(o *stdio.Options) { o.Cases = cases }, clientFrames...)
+}
+
+// driveWith is drive with the shim's options open to the test, for the runs
+// that arm some other way than a fixed case list.
+func driveWith(t *testing.T, set func(*stdio.Options), clientFrames ...string) run {
 	t.Helper()
 
 	var transcriptBuf, peer, subjErr bytes.Buffer
@@ -125,19 +137,20 @@ func drive(t *testing.T, cases []interpose.Case, clientFrames ...string) run {
 		t.Fatal(err)
 	}
 
-	sh, err := stdio.New(stdio.Options{
+	o := stdio.Options{
 		Command:    subjectCommand(),
 		Env:        append(os.Environ(), subjectEnv+"=1"),
 		In:         strings.NewReader(strings.Join(clientFrames, "\n") + "\n"),
 		Out:        nopCloser{&peer},
 		Errs:       &subjErr,
-		Cases:      cases,
 		Transcript: tr,
 		Sched:      sched,
 		Ledger:     interpose.NewLedger(sched),
 		Face:       transcript.Downstream,
 		RunSeed:    "8f2c1a",
-	})
+	}
+	set(&o)
+	sh, err := stdio.New(o)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,6 +166,7 @@ func drive(t *testing.T, cases []interpose.Case, clientFrames ...string) run {
 
 	return run{
 		lines:   decodeLines(t, transcriptBuf.String()),
+		raw:     transcriptBuf.String(),
 		toPeer:  peer.String(),
 		subjErr: subjErr.String(),
 	}
@@ -323,6 +337,11 @@ func TestShimInjectsATruncation(t *testing.T) {
 	if f["case_id"] != "stream/truncate-mid-frame" || f["kind"] != "truncate" {
 		t.Errorf("attribution = %v", cut["fault"])
 	}
+	// The cut bytes parse to no id, so the attribution is the only record of
+	// which request they were.
+	if rep, _ := f["replaced"].(map[string]any); rep["id"] != "2" || rep["id_type"] != "number" || rep["kind"] != "request" {
+		t.Errorf("replaced = %v, want the request's id, number 2, and that it was a request", f["replaced"])
+	}
 }
 
 // A case whose matcher never fires leaves the traffic alone. Under relay that
@@ -353,3 +372,117 @@ func TestShimLeavesUnmatchedTrafficAlone(t *testing.T) {
 type nopCloser struct{ io.Writer }
 
 func (nopCloser) Close() error { return nil }
+
+// armer stands in for --revision auto's selection: it records which revision
+// the shim asked about, and answers with cases cited against it.
+type armer struct {
+	mu    sync.Mutex
+	asked []revision.Revision
+	match interpose.Match
+}
+
+func (a *armer) arm(r revision.Revision) []interpose.Case {
+	a.mu.Lock()
+	a.asked = append(a.asked, r)
+	a.mu.Unlock()
+	return []interpose.Case{{
+		ID:       "frame/malformed-unbalanced",
+		Citation: "frame/malformed-unbalanced@" + string(r) + "#seed=8f2c1a",
+		Match:    a.match,
+		Fault:    interpose.Fault{Kind: "malformed_json"},
+	}}
+}
+
+// An auto run arms when the handshake settles, against the revision it settled
+// on. That revision is what the citation names -- on the armed list and on the
+// faulted frame -- because it is what a reader reproduces the run with.
+func TestAnAutoRunArmsAgainstTheNegotiatedRevision(t *testing.T) {
+	a := &armer{match: interpose.Match{Method: interpose.ParseGlob("tools/call"), Direction: transcript.S2C}}
+	got := driveWith(t, func(o *stdio.Options) { o.Arm = a.arm }, initialize, toolsCall(2))
+
+	if len(a.asked) != 1 || a.asked[0] != revision.V20251125 {
+		t.Fatalf("armed for %v, want once for the negotiated 2025-11-25", a.asked)
+	}
+
+	want := "frame/malformed-unbalanced@2025-11-25#seed=8f2c1a"
+	hdr := got.ofType("header")
+	if len(hdr) != 1 {
+		t.Fatalf("headers: %d", len(hdr))
+	}
+	if cases, _ := hdr[0]["cases"].([]any); len(cases) != 1 || cases[0] != want {
+		t.Errorf("armed = %v, want [%s]", hdr[0]["cases"], want)
+	}
+
+	var cited bool
+	for _, f := range got.ofType("frame") {
+		if fa, _ := f["fault"].(map[string]any); fa != nil {
+			cited = true
+			if fa["citation"] != want {
+				t.Errorf("faulted frame cites %v, want %s", fa["citation"], want)
+			}
+		}
+	}
+	if !cited {
+		t.Error("the case armed at settlement never fired on the call after it")
+	}
+}
+
+// Before the handshake settles nothing is armed, so nothing is faulted: charpy
+// does not yet know which cases apply or what revision a citation would name.
+// The client's initialize request is the frame that always crosses first.
+func TestAnAutoRunFaultsNothingBeforeTheHandshake(t *testing.T) {
+	a := &armer{match: interpose.Match{Method: interpose.ParseGlob("initialize"), Direction: transcript.C2S}}
+	got := driveWith(t, func(o *stdio.Options) { o.Arm = a.arm }, initialize, toolsCall(2))
+
+	if n := len(got.events(string(transcript.FaultApplied))); n != 0 {
+		t.Errorf("%d faults applied before the revision was known", n)
+	}
+	// The subject still settled the run, so the case was armed and is on the
+	// record -- as a case that never fired, which coverage reports.
+	if len(a.asked) != 1 {
+		t.Errorf("armed %d times, want once", len(a.asked))
+	}
+}
+
+// A run arms once. Both a fixed list and a deferred one is a caller that has
+// not decided which, and guessing would arm the wrong set.
+func TestCasesAndArmAreExclusive(t *testing.T) {
+	_, err := stdio.New(stdio.Options{
+		Command: subjectCommand(),
+		Cases:   []interpose.Case{{ID: "x"}},
+		Arm:     func(revision.Revision) []interpose.Case { return nil },
+	})
+	if err == nil {
+		t.Error("New accepted both Cases and Arm")
+	}
+}
+
+// A plan that delivers the matched frame untouched beside what it injects
+// leaves that frame the subject's. Attributed, it read as tampered, and every
+// layer that judges the subject -- schema, invariants, reaction, all through
+// SubjectOriginated -- dropped the subject's real answer from its evidence.
+func TestAnUntouchedAnswerBesideADuplicateIsStillTheSubjects(t *testing.T) {
+	dup := interpose.Case{
+		ID:       "id/duplicate-response",
+		Citation: "id/duplicate-response@2025-11-25#seed=8f2c1a",
+		Match:    interpose.Match{Method: interpose.ParseGlob("tools/call"), Direction: transcript.S2C},
+		Fault:    interpose.Fault{Kind: "duplicate_id", Params: map[string]any{"mode": "double_response"}},
+	}
+	got := drive(t, []interpose.Case{dup}, initialize, toolsCall(2))
+
+	var own, charpys int
+	for _, f := range drivertest.Read(t, got.raw).Frames() {
+		if f.Direction != transcript.S2C || f.MethodName() != "tools/call" {
+			continue
+		}
+		if oracle.SubjectOriginated(transcript.ClassServer, f) {
+			own++
+		} else {
+			charpys++
+		}
+	}
+	if own != 1 || charpys != 1 {
+		t.Errorf("the subject's answers %d, charpy's %d; want the original the subject's and only the copy charpy's",
+			own, charpys)
+	}
+}

@@ -1,11 +1,11 @@
-package liveness_test
+package reaction_test
 
 import (
 	"strings"
 	"testing"
 
 	"github.com/serverplumber/charpy/internal/oracle"
-	"github.com/serverplumber/charpy/internal/oracle/liveness"
+	"github.com/serverplumber/charpy/internal/oracle/reaction"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -47,7 +47,7 @@ func itoa64(n int64) string {
 // A probe that answered is a recovery, and the layer reports it -- reporting
 // recovery is the point, not a silence.
 func TestAnAnsweredProbeIsRecovery(t *testing.T) {
-	rep := liveness.Check(read(t, header, probe(1, "ok", 1_200_000_000)))
+	rep := reaction.Check(read(t, header, probe(1, "ok", 1_200_000_000)))
 	if len(rep.Findings) != 1 {
 		t.Fatalf("findings: %d, want 1", len(rep.Findings))
 	}
@@ -65,12 +65,12 @@ func TestAnAnsweredProbeIsRecovery(t *testing.T) {
 
 // A probe that timed out is a subject that did not recover in the budget.
 func TestATimedOutProbeIsNoRecovery(t *testing.T) {
-	rep := liveness.Check(read(t, header, probe(1, "timeout", 30_000_000_000)))
+	rep := reaction.Check(read(t, header, probe(1, "timeout", 30_000_000_000)))
 	if len(rep.Findings) != 1 {
 		t.Fatalf("findings: %d, want 1", len(rep.Findings))
 	}
 	f := rep.Findings[0]
-	// OBSERVED, not MUST: liveness has no generated artifact behind it, so it
+	// OBSERVED, not MUST: recovery has no generated artifact behind it, so it
 	// reports the fact for a human rather than failing the build.
 	if f.Verdict != oracle.Observed {
 		t.Errorf("verdict = %s, want OBSERVED", f.Verdict)
@@ -80,9 +80,9 @@ func TestATimedOutProbeIsNoRecovery(t *testing.T) {
 	}
 }
 
-// A run that probed nothing yields no liveness finding.
+// A run that probed nothing yields no recovery finding.
 func TestNoProbesYieldNothing(t *testing.T) {
-	if got := liveness.Check(read(t, header)); len(got.Findings) != 0 {
+	if got := reaction.Check(read(t, header)); len(got.Findings) != 0 {
 		t.Errorf("findings: %v, want none", got.Findings)
 	}
 }

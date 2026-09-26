@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/serverplumber/charpy/internal/clock"
@@ -41,6 +42,22 @@ type Options struct {
 	// server, and the one face under test is the client, with nothing to join.
 	Correlate func() transcript.Link
 
+	// Applied is called once a fault has acted on a response, with the
+	// session the response belongs to. The hostile HTTP mode uses it to have
+	// its reference server ask the client under test a question afterwards;
+	// nil asks nothing, which is what owned stimulus wants -- its own peer
+	// asks, through [Proxy.Ask], once its script is done.
+	Applied func(sessionID string)
+
+	// AnswerDestroyed has charpy answer its own peer when a fault leaves the
+	// peer's request without the id it carried. The subject's answer to such
+	// a request is still recorded -- it is the reaction being judged -- but
+	// it is not relayed: the subject was answering bytes the peer never sent,
+	// and an HTTP error on a call makes the SDK client close its whole
+	// session, which leaves nothing to ask the question after the fault on.
+	// Owned stimulus only, as over stdio.
+	AnswerDestroyed bool
+
 	RunSeed   string
 	ClientID  string
 	SessionID string
@@ -64,6 +81,14 @@ type Proxy struct {
 	// yet -- the initialize that establishes one. Each such handshake is its
 	// own connection.
 	nextConn atomic.Int64
+
+	// faulting is held while a fault is applied, up to its fault_applied
+	// line, and applied counts those lines. A faulted event reaches the
+	// client before its fault_applied is written, so without the lock a
+	// follow-up asked the moment the client's call returned could cross
+	// ahead of the fault it follows (see [Proxy.Askable]).
+	faulting sync.Mutex
+	applied  int
 }
 
 // New prepares a proxy. It serves once Handler is mounted and a subject is up.
@@ -114,6 +139,52 @@ func (p *Proxy) RecordProbe(method string, outcome transcript.ProbeOutcome, elap
 	p.x.Conn(p.o.ClientID, p.o.SessionID, p.o.ConnID).Probe(method, outcome, elapsedNS)
 }
 
+// Note records a harness annotation on sessionID's connection, for a caller
+// acting on the proxy's traffic from outside a handler.
+func (p *Proxy) Note(sessionID, text string) {
+	p.x.Conn(p.o.ClientID, sessionID, sessionID).Note(text)
+}
+
+// Askable reports whether a fault has acted in this run, so that a follow-up
+// question has something to follow. It waits out a fault still being applied.
+//
+// A then = "close" does not make the session unaskable here, as it does over
+// stdio. On HTTP it ends one response stream; the session, its id and the
+// client's other streams survive it, so a question on the same session is
+// still a question the subject can answer.
+func (p *Proxy) Askable() bool {
+	p.faulting.Lock()
+	defer p.faulting.Unlock()
+	return p.applied > 0
+}
+
+// Ask marks the next request crossing sessionID's connection in dir as
+// charpy's follow-up question, keeping it and its answer out of the armed
+// case's reach (exchange.Conn.Ask). The returned func withdraws the mark if
+// the question never crossed.
+func (p *Proxy) Ask(sessionID string, dir transcript.Direction) (withdraw func()) {
+	return p.x.Conn(p.o.ClientID, sessionID, sessionID).Ask(dir)
+}
+
+// faultApplied records that a fault acted on a frame travelling dir, and hands
+// the session to the Applied hook. Callers hold p.faulting.
+func (p *Proxy) faultApplied(conn *exchange.Conn, c interpose.Case, verb interpose.Verb, dir transcript.Direction, resp *http.Response) {
+	conn.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(verb), dir))
+	p.applied++
+	if p.o.Applied == nil || resp == nil {
+		return
+	}
+	// The initialize that establishes a session carries no id on its request,
+	// so the session it belongs to is named by the response.
+	sid := resp.Header.Get("Mcp-Session-Id")
+	if sid == "" {
+		sid = resp.Request.Header.Get("Mcp-Session-Id")
+	}
+	if sid != "" {
+		p.o.Applied(sid)
+	}
+}
+
 // ServeHTTP forwards one request to the subject and relays the response,
 // faulting whichever direction a case matched.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -126,11 +197,19 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn := p.conn(r)
 
-	// The client's frame, toward the subject. v0 has no c2s cases, so it is
-	// observed and recorded but forwarded unchanged; a c2s fault would branch
-	// here, exactly as the shim's does.
+	// The client's frame, toward the subject. A case may fault it here, as the
+	// shim's may: a server subject receives c2s, so this is where its
+	// questions are put (ADR-013). A follow-up question crossing here is kept
+	// out of the matcher's reach, and is how its answer is known on the way
+	// back.
 	if req, ok := envelope.Parse(body); ok == nil {
 		conn.Observe(req, transcript.C2S)
+		if !conn.FollowUp(req, transcript.C2S) {
+			if cases := p.match.Select(conn.FrameOf(req, transcript.C2S)); len(cases) > 0 {
+				p.serveFaulted(w, r, cases[0], req, body, conn)
+				return
+			}
+		}
 		conn.Frame(transcript.C2S, req.Raw(), nil, requestHTTP(r))
 	}
 
@@ -144,6 +223,184 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	p.relay(w, resp, conn)
 }
+
+// serveFaulted forwards a request a case matched, with the case's fault on it,
+// and relays the subject's answer.
+//
+// The verbs map onto a request as they do onto a stdio line, with two
+// differences the transport forces. A frame charpy synthesizes beside the
+// request -- a duplicate, an answer to something never asked -- goes to the
+// subject as a POST of its own, since HTTP carries one message per request;
+// what the subject answers to it is recorded, and not relayed, because the
+// client never sent it. And withholding the request is not deliverable: the
+// client's POST is owed an HTTP answer, and a request the subject never sees
+// leaves charpy nothing to answer it with. That is noted rather than faked.
+//
+// fault_applied is written once everything the fault puts on the wire has
+// crossed -- the request, and any frames sent beside it -- and before the
+// subject's answer is relayed, so the reaction layer's anchor precedes the
+// reaction.
+func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose.Case, m envelope.Message, body []byte, conn *exchange.Conn) {
+	p.faulting.Lock()
+	held := true
+	release := func() {
+		if held {
+			held = false
+			p.faulting.Unlock()
+		}
+	}
+	defer release()
+
+	conn.FaultEvent(transcript.FaultScheduled, c, nil)
+	prior, _ := conn.PriorResolved()
+	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
+	switch {
+	case err != nil:
+		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
+		plan = fault.Plan{}
+	case plan.Hold != nil || plan.Swallow:
+		conn.Note(fmt.Sprintf("case %s: %s is not deliverable on an HTTP request; "+
+			"the client's POST is owed an answer, and a request the subject never sees leaves none",
+			c.ID, plan.Verb()))
+		plan = fault.Plan{}
+	}
+	if plan.Deliver == nil && len(plan.Before) == 0 && len(plan.After) == 0 {
+		conn.Frame(transcript.C2S, m.Raw(), nil, requestHTTP(r))
+		release()
+		p.forwardAndRelay(w, r, body, conn)
+		return
+	}
+
+	f := conn.FrameOf(m, transcript.C2S)
+	att := c.TranscriptFault()
+	for _, extra := range plan.Before {
+		p.inter.Synthesize(f, c, extra)
+		p.aside(r, extra.Raw(), att, conn)
+	}
+
+	send := body
+	var sentAtt *transcript.Fault
+	if plan.Deliver != nil {
+		p.inter.Rewrite(f, c, m, *plan.Deliver)
+		raw, whole := plan.Deliver.Raw(), true
+		send = raw
+		if plan.Cut != nil {
+			// A request body has no delimiter to withhold, so a cut is the
+			// body ending early -- sent with a length that says so, which is
+			// what a client that died mid-write leaves a server holding.
+			if at, err := wire.EncodeLine(raw).Cut(plan.Cut.At, plan.Cut.Opts); err != nil {
+				conn.Note(fmt.Sprintf("cut %s did not apply: %v", plan.Cut.At, err))
+			} else if at < len(raw) {
+				send, whole = raw[:at], false
+			}
+		}
+		sentAtt = interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, send, whole)
+	}
+	crossed, _ := envelope.Parse(send)
+	conn.Frame(transcript.C2S, crossed.Raw(), sentAtt, requestHTTP(r))
+
+	resp, err := p.forward(r, send)
+	if err != nil {
+		p.faultApplied(conn, c, plan.Verb(), transcript.C2S, nil)
+		release()
+		conn.Note(fmt.Sprintf("forwarding to subject: %v", err))
+		http.Error(w, "charpy: subject unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// After the request, and while its answer is still in flight: a duplicate
+	// sent here is a second request with the same id outstanding at once.
+	for _, extra := range plan.After {
+		p.inter.Synthesize(f, c, extra)
+		p.aside(r, extra.Raw(), att, conn)
+	}
+	p.faultApplied(conn, c, plan.Verb(), transcript.C2S, resp)
+	release()
+
+	if p.o.AnswerDestroyed && m.Kind == envelope.KindRequest && sentAtt != nil &&
+		sentAtt.Replaced.Present() && sentAtt.ReplacedKind == envelope.KindRequest {
+		p.relay(&discard{h: http.Header{}}, resp, conn)
+		p.answerDestroyed(w, r, m, sentAtt, conn)
+		return
+	}
+	p.relay(w, resp, conn)
+}
+
+// answerDestroyed answers the peer's request itself, as the stdio shim does:
+// charpy's frame, attributed to the case, so no layer reads it as the
+// subject's -- the subject never received the request it answers.
+func (p *Proxy) answerDestroyed(w http.ResponseWriter, r *http.Request, req envelope.Message, att *transcript.Fault, conn *exchange.Conn) {
+	ans, err := envelope.NewError(req.ID, destroyedCode,
+		"charpy destroyed this request in transit ("+att.Citation+"); the subject never received it", nil)
+	if err != nil {
+		conn.Note(fmt.Sprintf("answering a destroyed request: %v", err))
+		http.Error(w, "charpy: answering a destroyed request", http.StatusBadGateway)
+		return
+	}
+	conn.Observe(ans, transcript.S2C)
+	status := http.StatusOK
+	// charpy wrote this frame in its own right, so it names nothing it replaced.
+	own := *att
+	own.Replaced, own.ReplacedKind = envelope.ID{}, ""
+	conn.Frame(transcript.S2C, ans.Raw(), &own, &transcript.HTTP{Status: status})
+	w.Header().Set("Content-Type", "application/json")
+	if sid := r.Header.Get("Mcp-Session-Id"); sid != "" {
+		w.Header().Set("Mcp-Session-Id", sid)
+	}
+	w.WriteHeader(status)
+	if _, err := w.Write(ans.Raw()); err != nil {
+		conn.Note(fmt.Sprintf("writing to client: %v", err))
+	}
+}
+
+// destroyedCode is the JSON-RPC error charpy answers its own peer with for a
+// request it destroyed: implementation-defined server-error range, and not one
+// MCP assigns. The stdio shim uses the same.
+const destroyedCode = -32099
+
+// forwardAndRelay forwards a request unchanged and relays the answer.
+func (p *Proxy) forwardAndRelay(w http.ResponseWriter, r *http.Request, body []byte, conn *exchange.Conn) {
+	resp, err := p.forward(r, body)
+	if err != nil {
+		conn.Note(fmt.Sprintf("forwarding to subject: %v", err))
+		http.Error(w, "charpy: subject unreachable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	p.relay(w, resp, conn)
+}
+
+// aside sends a frame charpy synthesized to the subject as a request of its
+// own, carrying the client's headers so it lands in the client's session. The
+// subject's answer is recorded as ever and relayed to nobody: the client never
+// sent this frame, and an answer it never asked for is not charpy's to give it.
+//
+// It runs under p.faulting, and relaying the answer offers it to the matcher.
+// That cannot fault it, and so cannot take the lock again: the armed case is
+// c2s -- that is why this runs at all -- and the loader requires every case to
+// state its direction, so it never matches an s2c answer.
+func (p *Proxy) aside(r *http.Request, raw []byte, att *transcript.Fault, conn *exchange.Conn) {
+	m, _ := envelope.Parse(raw)
+	conn.Observe(m, transcript.C2S)
+	conn.Frame(transcript.C2S, m.Raw(), att, requestHTTP(r))
+	resp, err := p.forward(r, raw)
+	if err != nil {
+		conn.Note(fmt.Sprintf("sending a synthesized frame to the subject: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+	p.relay(&discard{h: http.Header{}}, resp, conn)
+}
+
+// discard is a response writer that keeps nothing, for an answer the client
+// must not see. It flushes, because the event-stream path flushes each unit.
+type discard struct{ h http.Header }
+
+func (d *discard) Header() http.Header         { return d.h }
+func (d *discard) Write(b []byte) (int, error) { return len(b), nil }
+func (d *discard) WriteHeader(int)             {}
+func (d *discard) Flush()                      {}
 
 // conn identifies the connection a request belongs to. A reconnecting client
 // is more than one connection, and the ledger must see that: an id resolved on
@@ -205,30 +462,43 @@ func (p *Proxy) relayJSON(w http.ResponseWriter, resp *http.Response, conn *exch
 	prior, _ := conn.PriorResolved()
 	conn.Observe(m, transcript.S2C)
 
-	att, out, applied := p.planJSON(m, prior, conn)
+	att, out, applied := p.planJSON(m, prior, conn, resp, len(bytes.TrimSpace(body)) == 0)
 	deliver := out.Raw()
 	if !applied {
 		deliver = body
 	}
+
+	// Every frame toward the client is recorded before it is written, as the
+	// shim's are: the client may answer as soon as the bytes land, on another
+	// request, and its answer must not take the earlier seq.
+	crossed, _ := envelope.Parse(deliver)
+	conn.Frame(transcript.S2C, crossed.Raw(), att, responseHTTP(resp))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(deliver); err != nil {
 		conn.Note(fmt.Sprintf("writing to client: %v", err))
 	}
-	crossed, _ := envelope.Parse(deliver)
-	conn.Frame(transcript.S2C, crossed.Raw(), att, responseHTTP(resp))
 }
 
 // planJSON runs a matched case's plan against a JSON response, returning the
 // message to deliver. Cut, hold, swallow and multi-frame verbs do not apply to
 // a single JSON body; each is noted rather than silently dropped.
-func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.Conn) (*transcript.Fault, envelope.Message, bool) {
+func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.Conn, resp *http.Response, empty bool) (*transcript.Fault, envelope.Message, bool) {
+	// An accepted notification or response comes back 202 with no body, and
+	// no message crossed for a case to attach to. Offering the matcher an
+	// empty frame would let a case with no method fault the acknowledgement
+	// of a client's answer, as though the server had said something.
+	if empty || conn.FollowUp(m, transcript.S2C) {
+		return nil, m, false
+	}
 	cases := p.match.Select(conn.FrameOf(m, transcript.S2C))
 	if len(cases) == 0 {
 		return nil, m, false
 	}
 	c := cases[0]
+	p.faulting.Lock()
+	defer p.faulting.Unlock()
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
 
 	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
@@ -243,9 +513,9 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 	if plan.Deliver == nil {
 		return nil, m, false
 	}
-	att := c.Rewrote(m, *plan.Deliver)
+	att := interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, plan.Deliver.Raw(), true)
 	p.inter.Rewrite(conn.FrameOf(m, transcript.S2C), c, m, *plan.Deliver)
-	conn.FaultEvent(transcript.FaultApplied, c, map[string]any{"verb": string(plan.Verb())})
+	p.faultApplied(conn, c, plan.Verb(), transcript.S2C, resp)
 	return att, *plan.Deliver, true
 }
 
@@ -274,13 +544,16 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 		prior, _ := conn.PriorResolved()
 		conn.Observe(m, transcript.S2C)
 
-		cases := p.match.Select(conn.FrameOf(m, transcript.S2C))
+		var cases []interpose.Case
+		if !conn.FollowUp(m, transcript.S2C) {
+			cases = p.match.Select(conn.FrameOf(m, transcript.S2C))
+		}
 		if len(cases) == 0 {
+			conn.Frame(transcript.S2C, unit.Body(), nil, sseHTTP(resp, unit))
 			if _, err := wire.Emit(sse, unit); err != nil {
 				conn.Note(fmt.Sprintf("relaying event: %v", err))
 				return
 			}
-			conn.Frame(transcript.S2C, unit.Body(), nil, sseHTTP(resp, unit))
 			continue
 		}
 
@@ -299,13 +572,36 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 // is delivery -- a cut lands in the subject's own event bytes, and synthesized
 // frames become events.
 func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) bool {
+	plan, ok := p.applySSE(sse, c, m, unit, resp, prior, conn)
+	if !ok {
+		return false
+	}
+
+	switch plan.Then {
+	case fault.StreamClose:
+		conn.StreamClose(transcript.CharpyClose, int(sse.Written()))
+		return true
+	case fault.StreamStall:
+		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.wall()}); err != nil {
+			conn.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
+		}
+	}
+	return false
+}
+
+// applySSE is faultSSE up to the fault_applied line, under p.faulting. The
+// stream action that follows is left outside it, because a stall lasts as long
+// as it lasts and nothing waiting on the lock should wait on that.
+func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) (fault.Plan, bool) {
+	p.faulting.Lock()
+	defer p.faulting.Unlock()
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
 
 	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
 	if err != nil {
 		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
 		p.emitEvent(sse, unit, transcript.S2C, nil, resp, conn)
-		return false
+		return plan, false
 	}
 
 	f := conn.FrameOf(m, transcript.S2C)
@@ -328,11 +624,11 @@ func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		go p.releaseHold(held, plan.Hold, conn)
 	case plan.Cut != nil:
 		p.inter.Rewrite(f, c, m, m)
-		p.emitCut(sse, unit, plan.Cut, transcript.S2C, att, resp, conn)
+		p.emitCut(sse, unit, m, plan.Cut, transcript.S2C, att, resp, conn)
 	case plan.Deliver != nil:
 		p.inter.Rewrite(f, c, m, *plan.Deliver)
 		p.emitEvent(sse, wire.EncodeEvent("message", plan.Deliver.Raw(), ""), transcript.S2C,
-			c.Rewrote(m, *plan.Deliver), resp, conn)
+			interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, plan.Deliver.Raw(), true), resp, conn)
 	}
 
 	for _, extra := range plan.After {
@@ -340,18 +636,8 @@ func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		p.emitEvent(sse, wire.EncodeEvent("message", extra.Raw(), ""), transcript.S2C, att, resp, conn)
 	}
 
-	conn.FaultEvent(transcript.FaultApplied, c, map[string]any{"verb": string(plan.Verb())})
-
-	switch plan.Then {
-	case fault.StreamClose:
-		conn.StreamClose(transcript.CharpyClose, int(sse.Written()))
-		return true
-	case fault.StreamStall:
-		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.wall()}); err != nil {
-			conn.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
-		}
-	}
-	return false
+	p.faultApplied(conn, c, plan.Verb(), transcript.S2C, resp)
+	return plan, true
 }
 
 // releaseHold records a withdrawal but, unlike the shim's release, cannot act
@@ -379,26 +665,27 @@ func (p *Proxy) releaseHold(held *interpose.Withheld, hold *fault.Hold, conn *ex
 // emitCut delivers the matched event, truncated. The cut lands in the
 // subject's own bytes because unit is what the scanner measured, not a
 // re-rendering -- so "mid_event" is the middle of the event the subject sent.
-func (p *Proxy) emitCut(sse *wire.SSE, unit wire.Encoded, cut *fault.Cut, dir transcript.Direction, att *transcript.Fault, resp *http.Response, conn *exchange.Conn) {
+func (p *Proxy) emitCut(sse *wire.SSE, unit wire.Encoded, from envelope.Message, cut *fault.Cut, dir transcript.Direction, att *transcript.Fault, resp *http.Response, conn *exchange.Conn) {
 	n := unit.Len()
 	if at, err := unit.Cut(cut.At, cut.Opts); err != nil {
 		conn.Note(fmt.Sprintf("cut %s did not apply: %v", cut.At, err))
 	} else {
 		n = at
 	}
+	sent := unit.BodySent(n)
+	crossed, _ := envelope.Parse(sent)
+	conn.Frame(dir, crossed.Raw(), interpose.Crossed(att, from, from, sent, n == unit.Len()), sseHTTP(resp, unit))
 	if _, err := wire.EmitCut(sse, unit, n); err != nil {
 		conn.Note(fmt.Sprintf("writing cut event: %v", err))
 	}
-	crossed, _ := envelope.Parse(unit.BodySent(n))
-	conn.Frame(dir, crossed.Raw(), att, sseHTTP(resp, unit))
 }
 
 func (p *Proxy) emitEvent(sse *wire.SSE, e wire.Encoded, dir transcript.Direction, att *transcript.Fault, resp *http.Response, conn *exchange.Conn) {
+	crossed, _ := envelope.Parse(e.Body())
+	conn.Frame(dir, crossed.Raw(), att, sseHTTP(resp, e))
 	if _, err := wire.Emit(sse, e); err != nil {
 		conn.Note(fmt.Sprintf("writing event: %v", err))
 	}
-	crossed, _ := envelope.Parse(e.Body())
-	conn.Frame(dir, crossed.Raw(), att, sseHTTP(resp, e))
 }
 
 func (p *Proxy) wall() clock.Wall { return clock.RealWall() }

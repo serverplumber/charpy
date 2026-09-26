@@ -143,6 +143,42 @@ func TestOccurrenceEvery(t *testing.T) {
 	}
 }
 
+// A case with no ordinal takes the first frame that fits and no other. One
+// fault is what a case means; under a relay, where charpy does not choose the
+// traffic, "every frame that fits" was a storm of the same fault.
+func TestNoOrdinalSelectsTheFirstMatchingFrameOnly(t *testing.T) {
+	l := interpose.NewLedger(clock.NewInjected())
+	m := interpose.NewMatcher(l, caseWith("frame/malformed", interpose.Match{
+		Method: interpose.ParseGlob("tools/call"),
+	}))
+
+	// A frame that fails the predicates is not the first match.
+	if matched(m.Select(frame(envelope.KindRequest, "initialize"))) {
+		t.Fatal("a non-matching method matched")
+	}
+	var hits []int
+	for i := 1; i <= 3; i++ {
+		if matched(m.Select(frame(envelope.KindRequest, "tools/call"))) {
+			hits = append(hits, i)
+		}
+	}
+	if len(hits) != 1 || hits[0] != 1 {
+		t.Errorf("matched frames %v, want only the first: [1]", hits)
+	}
+}
+
+// Every matching frame is still available, but it has to be asked for.
+func TestEveryOneSelectsEachMatchingFrame(t *testing.T) {
+	l := interpose.NewLedger(clock.NewInjected())
+	m := interpose.NewMatcher(l, caseWith("frame/malformed", interpose.Match{Every: 1}))
+
+	for i := 1; i <= 3; i++ {
+		if !matched(m.Select(frame(envelope.KindRequest, "ping"))) {
+			t.Errorf("frame %d did not match a case asking for every frame", i)
+		}
+	}
+}
+
 // after_mono_ms is a predicate, not a post-filter. A frame arriving before the
 // gate is not a matching frame and must not spend the ordinal a later frame is
 // waiting for. If this ever regresses, a case with both keys fires one frame

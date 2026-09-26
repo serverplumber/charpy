@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -180,6 +181,17 @@ type config struct {
 	face     transcript.Face
 	cases    []interpose.Case
 
+	// unobservable is the cases dropped at selection only because nothing this
+	// charpy has can see their answer, kept so a refusal can say so rather
+	// than claim the case does not apply.
+	unobservable []catalogue.Case
+
+	// byRevision is what an auto run arms, keyed by the revision the
+	// handshake may settle on, each case compiled against that revision so
+	// its citation names it. Compiled here rather than at settlement so a
+	// case that does not compile fails the run before the subject starts.
+	byRevision map[revision.Revision][]interpose.Case
+
 	// stim shapes what the script originates. Zero calls the first tool the
 	// subject lists, with no arguments.
 	stim scenario.Options
@@ -241,10 +253,12 @@ func runConfig(rev, seedFlag, class, transport string) (config, int) {
 		return config{}, exitHarness
 	}
 
-	// "auto" means charpy has not been told, so it watches the initialize
-	// exchange instead. Cases are selected for every revision they could
-	// apply to and the matcher sorts it out, because the alternative is
-	// waiting for the handshake before any case can arm.
+	// "auto" means charpy has not been told, so it watches the handshake
+	// instead, and arms nothing until the handshake says which revision is in
+	// play: both which cases apply and what revision their citations name are
+	// facts about it. Arming the union beforehand would cite every case
+	// against the oldest revision it allows and fire cases the negotiated one
+	// rules out.
 	cfg.auto = rev == "auto"
 	if !cfg.auto {
 		cfg.revision = revision.Revision(rev)
@@ -260,40 +274,65 @@ func runConfig(rev, seedFlag, class, transport string) (config, int) {
 		return config{}, exitHarness
 	}
 
-	cfg.cases, err = selectFor(cat, cfg, transport, class)
+	if cfg.auto {
+		cfg.byRevision = map[revision.Revision][]interpose.Case{}
+		for _, r := range revision.All() {
+			if cfg.byRevision[r], err = selectFor(cat, r, cfg.seed, transport, class); err != nil {
+				fmt.Fprintf(os.Stderr, "charpy run: %v\n", err)
+				return config{}, exitHarness
+			}
+		}
+		return cfg, exitClean
+	}
+	cfg.cases, err = selectFor(cat, cfg.revision, cfg.seed, transport, class)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "charpy run: %v\n", err)
 		return config{}, exitHarness
 	}
+	for _, cs := range cat.Applicable(cfg.revision) {
+		if cs.SupportsTransport(transport) && cs.SupportsSubject(class) && !cs.ObservableBy(observers...) {
+			cfg.unobservable = append(cfg.unobservable, cs)
+		}
+	}
 	return cfg, exitClean
 }
 
-// selectFor compiles the cases a run will arm: those active for the revision,
-// runnable on the transport, and applicable to the subject class. Transport
-// and subject are applicability, like the revision range -- a stdio-only case
-// armed on an HTTP run, or a server case armed on a client run, could only
-// report UNTRIGGERED or test the wrong side, so both are dropped at selection
-// the same way an out-of-revision case is.
-func selectFor(cat *catalogue.Catalogue, cfg config, transport, class string) ([]interpose.Case, error) {
-	revs := []revision.Revision{cfg.revision}
-	if cfg.auto {
-		revs = revision.All()
-	}
-
-	seen := map[string]bool{}
-	var out []interpose.Case
-	for _, r := range revs {
-		for _, cs := range cat.Applicable(r) {
-			if seen[cs.ID] || !cs.SupportsTransport(transport) || !cs.SupportsSubject(class) {
-				continue
-			}
-			compiled, err := cs.Compile(r, cfg.seed)
-			if err != nil {
-				return nil, err
-			}
-			seen[cs.ID] = true
-			out = append(out, compiled)
+// explainUnobservable says which cases a glob would have selected but that no
+// observer here can judge, so a refusal names the reason instead of claiming
+// the case does not apply to the run.
+func explainUnobservable(cfg config, glob string) {
+	g := interpose.ParseGlob(glob)
+	for _, cs := range cfg.unobservable {
+		if glob == "" || g.Match(cs.ID) {
+			fmt.Fprintf(os.Stderr, "charpy run: %s applies, but its answer is seen by %s, "+
+				"and this charpy observes only %s\n",
+				cs.ID, strings.Join(cs.ObservedBy, " or "), strings.Join(observers, ", "))
 		}
+	}
+}
+
+// observers is what every driver can judge a case's answer by today: what
+// crossed the wire. The in-process driver and the differential will add to it.
+var observers = []string{"wire"}
+
+// selectFor compiles the cases a run will arm: those active for the revision,
+// runnable on the transport, applicable to the subject class, and observable
+// by something the run has. All four are applicability, like the revision
+// range -- a stdio-only case armed on an HTTP run, a server case armed on a
+// client run, or a case whose answer nothing here can see could only report
+// UNTRIGGERED, test the wrong side, or fire with nobody watching -- so each is
+// dropped at selection the same way an out-of-revision case is.
+func selectFor(cat *catalogue.Catalogue, r revision.Revision, seed, transport, class string) ([]interpose.Case, error) {
+	var out []interpose.Case
+	for _, cs := range cat.Applicable(r) {
+		if !cs.SupportsTransport(transport) || !cs.SupportsSubject(class) || !cs.ObservableBy(observers...) {
+			continue
+		}
+		compiled, err := cs.Compile(r, seed)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, compiled)
 	}
 	return out, nil
 }
@@ -380,6 +419,7 @@ func shim(command []string, cfg config, tr *transcript.Writer, out, subjErr io.W
 		Out:        os.Stdout,
 		Errs:       subjErr,
 		Cases:      cfg.cases,
+		Arm:        armAtSettlement(cfg),
 		Transcript: tr,
 		Sched:      sched,
 		Ledger:     interpose.NewLedger(sched),
@@ -407,6 +447,16 @@ func shim(command []string, cfg config, tr *transcript.Writer, out, subjErr io.W
 	// a clean relay exits 0 and leaves judgement offline where it belongs.
 	fmt.Fprintf(out, "charpy: run ended\n")
 	return exitClean
+}
+
+// armAtSettlement is how an auto run arms: nil for a run told its revision,
+// whose cases were compiled up front, and otherwise the lookup the shim asks
+// once the handshake settles.
+func armAtSettlement(cfg config) func(revision.Revision) []interpose.Case {
+	if !cfg.auto {
+		return nil
+	}
+	return func(r revision.Revision) []interpose.Case { return cfg.byRevision[r] }
 }
 
 // console serialises writes to a descriptor two things are using: charpy's own
@@ -471,6 +521,7 @@ func scripted(command []string, cfg config, glob, outDir string, noRedact bool, 
 		// A selection that matches nothing is a run that passes by not
 		// running, which is the failure mode the loader exists to prevent.
 		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to %s\n", glob, cfg.revision)
+		explainUnobservable(cfg, glob)
 		return exitHarness
 	}
 
@@ -589,6 +640,7 @@ func httpScripted(url string, cfg config, glob, outDir string, noRedact bool, ou
 	selected := matching(cfg.cases, glob)
 	if len(selected) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to %s\n", glob, cfg.revision)
+		explainUnobservable(cfg, glob)
 		return exitHarness
 	}
 
@@ -674,6 +726,7 @@ func hostileRun(cfg config, glob, outDir string, noRedact bool, out io.Writer) i
 	}
 	if len(cases) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no client case applies to %s\n", cfg.revision)
+		explainUnobservable(cfg, glob)
 		return exitHarness
 	}
 
@@ -736,6 +789,7 @@ func hostileHTTPRun(listen string, cfg config, glob, outDir string, noRedact boo
 	}
 	if len(cases) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no client case applies to %s\n", cfg.revision)
+		explainUnobservable(cfg, glob)
 		return exitHarness
 	}
 

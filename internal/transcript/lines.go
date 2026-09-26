@@ -168,6 +168,9 @@ type FaultLine struct {
 type ReplacedLine struct {
 	ID     string          `json:"id"`
 	IDType envelope.IDType `json:"id_type"`
+	// Kind is absent in transcripts written before it was recorded; a
+	// reader takes that to mean an answer, which is all those runs replaced.
+	Kind envelope.Kind `json:"kind,omitempty"`
 }
 
 type SessionLine struct {
@@ -579,7 +582,7 @@ func faultLineFrom(f *Fault) (*FaultLine, error) {
 	}
 	out := &FaultLine{CaseID: f.CaseID, Citation: f.Citation, Kind: f.Kind, Params: f.Params}
 	if f.Replaced.Present() {
-		out.Replaced = &ReplacedLine{ID: f.Replaced.Text(), IDType: f.Replaced.Type()}
+		out.Replaced = &ReplacedLine{ID: f.Replaced.Text(), IDType: f.Replaced.Type(), Kind: f.ReplacedKind}
 	}
 	return out, nil
 }

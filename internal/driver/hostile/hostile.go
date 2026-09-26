@@ -22,6 +22,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
 
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/exchange"
@@ -68,6 +70,12 @@ type Hostile struct {
 
 	toClient *wire.Stdio
 	toServer *wire.Stdio
+
+	// asks tracks the follow-up pings in flight, and asking keeps it to one at
+	// a time: a case with no ordinal faults every response, and a ping per
+	// fault would pile questions onto a client still answering the first.
+	asks   sync.WaitGroup
+	asking atomic.Bool
 }
 
 // New prepares a run. The reference-peer server is built but not started.
@@ -118,6 +126,10 @@ func (h *Hostile) Run(ctx context.Context) error {
 	served := make(chan error, 1)
 	go func() { served <- h.server.Serve(ctx) }()
 
+	// Follow-up pings run under their own context, ended before the server
+	// closes, so none outlives the run to write into a closed transcript.
+	askCtx, stopAsking := context.WithCancel(ctx)
+
 	h.x.Event(transcript.ConnOpen, map[string]any{"era": string(h.server.Era())})
 
 	// Client to server: the client's own requests, relayed clean. charpy's
@@ -127,7 +139,7 @@ func (h *Hostile) Run(ctx context.Context) error {
 	clientGone := make(chan struct{})
 	go func() {
 		defer close(clientGone)
-		h.relay(h.o.In, h.toServer, transcript.C2S, false)
+		h.relay(askCtx, h.o.In, h.toServer, transcript.C2S, false)
 		_ = h.toServer.Close()
 	}()
 
@@ -136,7 +148,7 @@ func (h *Hostile) Run(ctx context.Context) error {
 	s2cDone := make(chan struct{})
 	go func() {
 		defer close(s2cDone)
-		h.relay(h.server.Out, h.toClient, transcript.S2C, true)
+		h.relay(askCtx, h.server.Out, h.toClient, transcript.S2C, true)
 	}()
 
 	// The run ends when the client goes away or a signal cancels the context.
@@ -147,13 +159,15 @@ func (h *Hostile) Run(ctx context.Context) error {
 	case <-clientGone:
 	case <-ctx.Done():
 	}
+	stopAsking()
 	err := h.server.Close()
 	<-s2cDone
 	<-served
+	h.asks.Wait()
 	return err
 }
 
-func (h *Hostile) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool) {
+func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool) {
 	sc := bufio.NewScanner(from)
 	sc.Buffer(make([]byte, 0, 64<<10), maxFrame)
 
@@ -168,9 +182,13 @@ func (h *Hostile) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction
 		prior, _ := h.x.PriorResolved()
 		h.x.Observe(m, dir)
 
+		if h.x.FollowUp(m, dir) {
+			h.deliver(m, dir, to, nil)
+			continue
+		}
 		if faulted {
 			if cases := h.match.Select(h.x.FrameOf(m, dir)); len(cases) > 0 {
-				h.applyFault(cases[0], m, dir, to, prior)
+				h.applyFault(ctx, cases[0], m, dir, to, prior)
 				continue
 			}
 		}
@@ -181,7 +199,7 @@ func (h *Hostile) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction
 // applyFault carries out a plan toward the client. The verb dance is the stdio
 // shim's -- delivery here is stdio too, since the client is on pipes -- kept as
 // a sibling for now (see notes): rewrite, synthesize, and the stream actions.
-func (h *Hostile) applyFault(c interpose.Case, m envelope.Message, dir transcript.Direction, to *wire.Stdio, prior envelope.ID) {
+func (h *Hostile) applyFault(ctx context.Context, c interpose.Case, m envelope.Message, dir transcript.Direction, to *wire.Stdio, prior envelope.ID) {
 	h.x.FaultEvent(transcript.FaultScheduled, c, nil)
 
 	plan, err := fault.Apply(c, m, fault.Context{RunSeed: h.o.RunSeed, Resolved: prior})
@@ -207,7 +225,7 @@ func (h *Hostile) applyFault(c interpose.Case, m envelope.Message, dir transcrip
 		go h.release(held, plan.Hold, dir, to, att)
 	case plan.Deliver != nil:
 		h.inter.Rewrite(f, c, m, *plan.Deliver)
-		h.deliverCut(*plan.Deliver, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
+		h.deliverCut(*plan.Deliver, &m, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
 	}
 
 	for _, extra := range plan.After {
@@ -215,7 +233,14 @@ func (h *Hostile) applyFault(c interpose.Case, m envelope.Message, dir transcrip
 		h.deliver(extra, dir, to, att)
 	}
 
-	h.x.FaultEvent(transcript.FaultApplied, c, map[string]any{"verb": string(plan.Verb())})
+	h.x.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(plan.Verb()), dir))
+
+	// A closed pipe leaves no session to ask on, and a stall is this relay
+	// blocking: a ping could not reach the client through it, nor its answer
+	// come back. Both are left to the recovery probe.
+	if plan.Then != fault.StreamClose && plan.Then != fault.StreamStall {
+		h.ask(ctx)
+	}
 
 	switch plan.Then {
 	case fault.StreamClose:
@@ -226,6 +251,42 @@ func (h *Hostile) applyFault(c interpose.Case, m envelope.Message, dir transcrip
 			h.x.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
 		}
 	}
+}
+
+// ask has charpy's reference server put one ping to the client after a fault,
+// so the reaction layer has an answer to judge (ADR-013).
+//
+// The server asks, through the SDK, rather than charpy writing a ping into the
+// pipe: the question is then ordinary correct traffic crossing the interposer,
+// and the answer returns to the session that asked. It is marked as the
+// follow-up before it is sent, so the armed case cannot match it on the way
+// out -- this relay is the one it crosses.
+//
+// It runs in its own goroutine because the ping crosses the very relay that
+// called this, and waits for as long as the run does: a client that never
+// answers is the finding, which the transcript already shows as an open
+// request, so the error is noted rather than returned.
+func (h *Hostile) ask(ctx context.Context) {
+	if !h.asking.CompareAndSwap(false, true) {
+		return
+	}
+	h.asks.Add(1)
+	go func() {
+		defer h.asks.Done()
+		defer h.asking.Store(false)
+
+		withdraw := h.x.Ask(transcript.S2C)
+		defer withdraw()
+		err := h.server.Ping(ctx)
+		switch {
+		case err == nil, ctx.Err() != nil:
+		case errors.Is(err, peer.ErrCannotAsk):
+			// 2026-07-28 and later: a server asks nothing, so nothing-asked is
+			// the correct result rather than a gap.
+		default:
+			h.x.Note(fmt.Sprintf("follow-up ping: %v", err))
+		}
+	}()
 }
 
 func (h *Hostile) release(held *interpose.Withheld, hold *fault.Hold, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault) {
@@ -256,10 +317,10 @@ func (h *Hostile) release(held *interpose.Withheld, hold *fault.Hold, dir transc
 }
 
 func (h *Hostile) deliver(m envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault) {
-	h.deliverCut(m, dir, to, att, nil)
+	h.deliverCut(m, nil, dir, to, att, nil)
 }
 
-func (h *Hostile) deliverCut(m envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault, cut *fault.Cut) {
+func (h *Hostile) deliverCut(m envelope.Message, orig *envelope.Message, dir transcript.Direction, to *wire.Stdio, att *transcript.Fault, cut *fault.Cut) {
 	enc := wire.EncodeLine(m.Raw())
 	n := enc.Len()
 	if cut != nil {
@@ -269,8 +330,15 @@ func (h *Hostile) deliverCut(m envelope.Message, dir transcript.Direction, to *w
 			n = at
 		}
 	}
+	// As in the shim: only the matched frame is settled against what crossed.
+	if orig != nil {
+		att = interpose.Crossed(att, *orig, m, enc.Bytes[:n], n == enc.Len())
+	}
+	// Recorded before it is written, as the shim's is: the client may
+	// answer as soon as the bytes land, and its answer must not take the
+	// earlier seq.
+	h.x.Frame(dir, enc.Bytes[:n], att, nil)
 	if written, err := wire.EmitCut(to, enc, n); err != nil {
 		h.x.Note(fmt.Sprintf("write failed after %d bytes: %v", written, err))
 	}
-	h.x.Frame(dir, enc.Bytes[:n], att, nil)
 }

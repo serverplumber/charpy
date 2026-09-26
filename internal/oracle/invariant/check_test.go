@@ -189,11 +189,13 @@ func TestChapysOwnFramesAreNotFindings(t *testing.T) {
 
 // I3: overlap is the fault, not reuse.
 func TestNoDuplicateInflightID(t *testing.T) {
+	// The subject allocates the ids of the requests it sends: a client
+	// subject's are c2s.
 	t.Run("two requests in flight at once", func(t *testing.T) {
-		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
-			ToSubject(req("7", "tools/call")).
-			ToSubject(req("7", "tools/list")).
-			FromSubject(res("7")).
+		got := invariant.Check(oracletest.New(t, transcript.ClassClient).
+			FromSubject(req("7", "tools/call")).
+			FromSubject(req("7", "tools/list")).
+			ToSubject(res("7")).
 			Done())
 
 		if len(findings(got, "no-duplicate-inflight-id")) != 1 {
@@ -202,9 +204,9 @@ func TestNoDuplicateInflightID(t *testing.T) {
 	})
 
 	t.Run("reuse after the first was answered is not a duplicate", func(t *testing.T) {
-		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
-			ToSubject(req("7", "tools/call")).FromSubject(res("7")).
-			ToSubject(req("7", "tools/list")).FromSubject(res("7")).
+		got := invariant.Check(oracletest.New(t, transcript.ClassClient).
+			FromSubject(req("7", "tools/call")).ToSubject(res("7")).
+			FromSubject(req("7", "tools/list")).ToSubject(res("7")).
 			Done())
 
 		if n := len(findings(got, "no-duplicate-inflight-id")); n != 0 {
@@ -249,5 +251,65 @@ func TestImplementedIsASubsetOfTheRegistry(t *testing.T) {
 	}
 	if len(invariant.Implemented()) >= len(invariant.All()) {
 		t.Error("Implemented should be the subset v0 actually evaluates")
+	}
+}
+
+// A request charpy destroyed is not an answer charpy replaced. The subject was
+// never asked with that id, so it owes the id nothing -- and when the same id
+// then does cross intact and goes unanswered, that silence is the subject's,
+// not "charpy replaced the answer".
+func TestAReplacedRequestIsNotAReplacedAnswer(t *testing.T) {
+	b := oracletest.New(t, transcript.ClassServer)
+	b.Raw(transcript.C2S, `{"jsonrpc":"2.0","id":7,"meth`, &transcript.Fault{
+		CaseID:       "stream/truncate-mid-frame",
+		Citation:     "stream/truncate-mid-frame@2025-11-25#seed=8f2c1a",
+		Kind:         "truncate",
+		Replaced:     envelope.NumberID(7),
+		ReplacedKind: envelope.KindRequest,
+	})
+	tr := b.ToSubject(req("7", "tools/call")).Done()
+
+	var neverAnswered bool
+	for _, f := range invariant.Check(tr).Findings {
+		if f.Reason == "charpy-replaced-the-answer" {
+			t.Errorf("a destroyed request was reported as a replaced answer: %s", f.Summary)
+		}
+		if f.Verdict == oracle.Observed && strings.Contains(f.Summary, "never answered") {
+			neverAnswered = true
+		}
+	}
+	if !neverAnswered {
+		t.Error("the intact request the subject left unanswered was not reported")
+	}
+}
+
+// A destroyed request on its own is owed nothing: no finding at all.
+func TestADestroyedRequestAloneOwesNothing(t *testing.T) {
+	b := oracletest.New(t, transcript.ClassServer)
+	b.Raw(transcript.C2S, `{"jsonrpc":"2.0","id":7,"meth`, &transcript.Fault{
+		CaseID:       "stream/truncate-mid-frame",
+		Citation:     "stream/truncate-mid-frame@2025-11-25#seed=8f2c1a",
+		Kind:         "truncate",
+		Replaced:     envelope.NumberID(7),
+		ReplacedKind: envelope.KindRequest,
+	})
+	if fs := invariant.Check(b.Done()).Findings; len(fs) != 0 {
+		t.Errorf("findings for a request the subject never received: %+v", fs)
+	}
+}
+
+// A server handed the same id twice at once -- charpy's duplicate beside the
+// original -- did not allocate either, and answering each is what it was asked
+// to do. Neither I3 nor I1 may file that against it.
+func TestADuplicateTheSubjectReceivedIsNotItsFinding(t *testing.T) {
+	b := oracletest.New(t, transcript.ClassServer).ToSubject(req("7", "tools/call"))
+	b.Raw(transcript.C2S, req("7", "tools/call"), &transcript.Fault{
+		CaseID: "id/duplicate-request-inflight", Citation: "id/duplicate-request-inflight@2025-11-25#seed=8f2c1a",
+		Kind: "duplicate_id",
+	})
+	got := invariant.Check(b.FromSubject(res("7")).FromSubject(res("7")).Done())
+
+	for _, f := range got.Findings {
+		t.Errorf("a finding against a server for a duplicate it received: %s %s", f.Check, f.Summary)
 	}
 }

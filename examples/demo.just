@@ -42,7 +42,7 @@ demo-build: build
 #   charpy replay <transcript>
 [doc('One case against a real subject over stdio, then the verdict')]
 demo: demo-build
-    ./charpy run --case frame/malformed-unbalanced --revision 2025-11-25 --timeout 5s \
+    ./charpy run --case frame/malformed-request --revision 2025-11-25 --timeout 5s \
         --tool test_simple_text --out {{ex_out}} -- {{ex_server}}
     just demo-replay
 
@@ -62,10 +62,11 @@ demo-stdio: demo-build
 
 #   charpy run --subject-url <url> --case '<glob>' --revision <rev> --tool <tool>
 #
-# The subject is already running and charpy sits in front of it, so the
-# stream/truncate cases cut real SSE bytes on their way back. Here the recipe
-# starts one to have something to proxy; against your own server, drop that and
-# point --subject-url at it.
+# The subject is already running and charpy sits in front of it, so the cases
+# put to a server -- a corrupted or cut-short request body, a duplicate request,
+# an answer to nothing -- reach it as real HTTP requests. Here the recipe starts
+# one to have something to proxy; against your own server, drop that and point
+# --subject-url at it.
 [doc('charpy proxies an HTTP subject it did not start')]
 demo-http: demo-build
     #!/usr/bin/env bash
@@ -74,8 +75,8 @@ demo-http: demo-build
     subject=$!
     trap 'kill $subject 2>/dev/null || true' EXIT
     until curl -s -o /dev/null http://127.0.0.1:9310/; do sleep 0.1; done
-    ./charpy run --subject-url http://127.0.0.1:9310/ --case 'stream/*' \
-        --revision 2025-11-25 --tool test_simple_text --out {{ex_out}}
+    ./charpy run --subject-url http://127.0.0.1:9310/ --case '*' \
+        --revision 2025-11-25 --timeout 5s --tool test_simple_text --out {{ex_out}}
 
 #   charpy run --hostile-http <addr> --case '<glob>' --revision <rev>
 #

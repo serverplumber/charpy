@@ -18,6 +18,7 @@ decision to be revisited.
 | ADR-010 | One reference peer and an interposer; no feral peer | Architecture |
 | ADR-011 | The reference peer is the Go SDK, pinned to a pre-release, seamed at bytes | Reference peer |
 | ADR-012 | One case armed per run under owned stimulus | Scenario player |
+| ADR-013 | A fault is put to its recipient, and judged by the recipient's reaction | Oracle |
 
 ---
 
@@ -437,3 +438,77 @@ not one session with a glob armed. The CLI surface does not change; what it does
 **Revisit if.** Soak mode (v1) wants sustained concurrent faults against one long-lived session,
 which is a different product — `soak.md` finds leaks rather than bugs, and a leak needs pressure
 rather than isolation. That is an argument for soak arming many, not for v0 doing so.
+
+---
+
+## ADR-013 — A fault is put to its recipient, and judged by the recipient's reaction
+
+**Question.** Every oracle layer judges the *author* of a frame: layer 1 validates what the subject
+wrote, and I1–I3 ask whether the subject's ids resolve, and `oracle.SubjectOriginated` excludes
+anything charpy touched. But a damaged frame is a question put to whoever *receives* it, and the
+answer is never inside the damaged frame -- it is in what the recipient does next. Who does the
+oracle judge a fault by, and what makes sure the recipient is the subject at all?
+
+**Decision.** Five parts.
+
+1. **A fault's subject is its recipient.** A case's `direction` and `face` must deliver its fault to
+   every subject class it lists: `c2s` at the downstream face for a server, `s2c` at the upstream
+   face for a client, either on the face it receives on for a gateway. The loader rejects a case
+   that breaks this, so `charpy policy validate` reports it as an authoring error.
+2. **Layer 4 is widened from liveness to reaction.** It is anchored at `fault_applied` and judges
+   only subject-originated frames after it, on the same connection. The fresh-session recovery
+   probe becomes one of its checks rather than the layer's whole meaning.
+3. **The generic tier comes first.** For every fault that reached the subject, the layer reports
+   whether the subject answered a request issued after the fault, stopped answering, or exited.
+   The case-specific tier -- expectations declared in `[case.expect]`, such as "answered `-32700`"
+   or "called a removed tool" -- follows on the same anchor.
+4. **Observability is applicability.** A case whose answer the wire cannot show -- a pending-map
+   leak, a client silently accepting `7` then `"7"` -- declares what can observe it, and selection
+   drops it where nothing can, as it drops an out-of-revision case.
+5. **The server column is re-authored as `c2s`**, each case judged by what the server writes next.
+
+**Why.** Running the catalogue against real subjects showed that every shipped case was `s2c`, so
+every case listed for `server` delivered its fault to charpy's own reference peer. The run reported
+nothing, and nothing rendered exactly like a server that passed. No shipped case tested a server.
+Three forms of the same error were in the catalogue at once: a malformed frame whose summary says
+"must not wedge the parser", when the parser was charpy's; a stdio truncation the subject never
+saw; and a schema violation declared `MUST` that could never produce one, because layer 1 rightly
+excludes the only frame that violated the schema -- the one charpy wrote.
+
+The oracle was not wrong about any of them. It had nothing of the subject's to judge, because
+nothing judged the recipient. The ledger already tags the *reference peer's* frames after a lie as
+consequences, so they are not blamed on the subject (`interposer.md` §3, job 4). The subject's
+frames after a fault are the other half of the same window, and they are the evidence.
+
+Widening liveness rather than adding a fifth layer, because recovery is one reaction among several
+-- answered again, stopped answering, exited, recovered on a fresh session -- and a layer for each
+would split one question across four places. Generic before case-specific, because it gives every
+fault an answer with no per-case authoring; a case with no expectations still says what happened.
+Before the gateway driver, because the gateway is the one subject where the shipped `s2c` cases
+already reach the subject, and a gateway run judged by author-only layers would carry the same
+blind spot onto both faces.
+
+**Considered.** A fourth non-verdict for "the fault reached charpy, not the subject". Rejected: the
+verdict vocabulary is a public contract -- JUnit, exit codes, archived transcripts -- and a
+misdirected case is an authoring error, which belongs at load time rather than in every report.
+The reaction layer still reports such a fault as `SKIPPED` with a reason, for transcripts that
+predate the rule and for relayed runs whose traffic the loader cannot see.
+
+Dropping misdirected cases at selection rather than rejecting them at load. Rejected: selection
+drops cases that are correct but inapplicable to *this* run. A case whose direction can never reach
+a subject it names is wrong for every run.
+
+**Cost.** Every fault_applied event must record the direction of the frame it acted on, which is
+additive within `schema_version: 1`. The scenario needs a follow-up exchange after the fault, and a
+`c2s` fault that destroys the peer's own request must still leave the peer able to ask the next
+question. And the catalogue loses its server cases until `c2s` ones replace them.
+
+**Supersedes.** `oracle.md` §6's definition of layer 4 as liveness alone. `faults-and-cases.md`
+§2's claim that injecting into `declared_output_schema` is MUST-eligible: *detecting* a server that
+breaks its own declared schema is layer 1 over any run and needs no fault, while *injecting* a
+break asks the recipient whether it validates, which is OBSERVED at most. The one-faced entry in
+`open-problems.md`, which part 1 closes at its source.
+
+**Revisit if.** A case turns out to need a fault delivered to charpy's own peer on purpose -- a
+fault whose point is what charpy's peer then sends the subject. That is a consequence, which job 4
+already attributes; it would be a new kind of case rather than an exception to part 1.

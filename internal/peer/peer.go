@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
+	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/serverplumber/charpy/internal/revision"
@@ -166,6 +169,7 @@ type Server struct {
 	srv *mcp.Server
 	t   *mcp.IOTransport
 	era revision.Revision
+	ask *asker
 }
 
 // NewServer prepares a reference-peer server at an era, with a minimal tool
@@ -192,7 +196,8 @@ func NewServer(o Options) (*Server, error) {
 		title = "charpy reference peer"
 	}
 
-	srv := newMCPServer(name, title, o.Era)
+	ask := newAsker(o.Era, false)
+	srv := newMCPServer(name, title, o.Era, ask)
 
 	serverReads, charpyWrites := io.Pipe()
 	charpyReads, serverWrites := io.Pipe()
@@ -202,6 +207,7 @@ func NewServer(o Options) (*Server, error) {
 		In:  charpyWrites,
 		srv: srv,
 		era: o.Era,
+		ask: ask,
 		t: &mcp.IOTransport{
 			Reader:        serverReads,
 			Writer:        serverWrites,
@@ -227,14 +233,147 @@ func (s *Server) Close() error {
 	return errors.Join(s.In.Close(), s.Out.Close())
 }
 
+// Ping has the server ask the client under test a ping, once the client has
+// initialized its session. See [ErrCannotAsk] for when it will not.
+//
+// The server asks rather than charpy writing a ping into the pipe, so the
+// question is the SDK's own bytes crossing the interposer like any other
+// correct frame, and the client's answer goes back to the session that asked
+// -- which is what makes it an answer rather than a stray response charpy
+// would have to swallow.
+func (s *Server) Ping(ctx context.Context) error { return s.ask.ping(ctx, "") }
+
+// ErrCannotAsk is returned when a reference server has no way to put a
+// question to the client: the era is 2026-07-28 or later, where a server
+// originates no requests, or the era is unset and nothing says the session
+// will be a sessioned one.
+var ErrCannotAsk = errors.New("peer: this server cannot originate a request")
+
+// asker holds the sessions a reference server's clients have initialized, so
+// a driver can put a question to one by id.
+//
+// It waits on initialization rather than on connection because a question put
+// before notifications/initialized is one the client may rightly refuse, and
+// a handshake the fault broke never initializes at all -- which is exactly the
+// case with no session to ask on. Keying by session id lets one asker serve
+// the HTTP handler's fresh server per session; over stdio there is one
+// session and its id is empty.
+type asker struct {
+	era revision.Revision
+	// stream says a question also waits for the client's standalone GET
+	// stream, which is where the SDK sends a request a server originates
+	// over Streamable HTTP. Stdio has one pipe and nothing to wait for.
+	stream bool
+
+	mu     sync.Mutex
+	ready  map[string]chan struct{}
+	listen map[string]chan struct{}
+	sess   map[string]*mcp.ServerSession
+}
+
+func newAsker(era revision.Revision, stream bool) *asker {
+	return &asker{
+		era: era, stream: stream,
+		ready: map[string]chan struct{}{}, listen: map[string]chan struct{}{},
+		sess: map[string]*mcp.ServerSession{},
+	}
+}
+
+// gateLocked returns the channel in m for id, closed when that gate opens.
+// Callers hold mu.
+func gateLocked(m map[string]chan struct{}, id string) chan struct{} {
+	ch, ok := m[id]
+	if !ok {
+		ch = make(chan struct{})
+		m[id] = ch
+	}
+	return ch
+}
+
+// open closes id's gate in m, once.
+func (a *asker) open(m map[string]chan struct{}, id string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	ch := gateLocked(m, id)
+	select {
+	case <-ch:
+	default:
+		close(ch)
+	}
+}
+
+// wait blocks until id's gate in m opens or ctx ends.
+func (a *asker) wait(ctx context.Context, m map[string]chan struct{}, id string) error {
+	a.mu.Lock()
+	ch := gateLocked(m, id)
+	a.mu.Unlock()
+	select {
+	case <-ch:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// initialized is the server's InitializedHandler.
+func (a *asker) initialized(_ context.Context, req *mcp.InitializedRequest) {
+	id := req.Session.ID()
+	a.mu.Lock()
+	if _, seen := a.sess[id]; !seen {
+		a.sess[id] = req.Session
+	}
+	a.mu.Unlock()
+	a.open(a.ready, id)
+}
+
+// ping waits for session id to initialize, bounded by ctx, and pings it.
+//
+// A server may ping its client in every sessioned revision; from 2026-07-28 a
+// server originates no requests at all, and the stateless handshake has no
+// initialized notification to wait for. An unset era is refused with it: the
+// SDK's own latest is the stateless one, so waiting would wait for nothing.
+func (a *asker) ping(ctx context.Context, id string) error {
+	if a.era == "" || a.era.Stateless() {
+		return ErrCannotAsk
+	}
+	if err := a.wait(ctx, a.ready, id); err != nil {
+		return err
+	}
+	if a.stream {
+		if err := a.wait(ctx, a.listen, id); err != nil {
+			return err
+		}
+	}
+	a.mu.Lock()
+	ss := a.sess[id]
+	a.mu.Unlock()
+
+	// The GET is seen before the SDK attaches it to the session, so the first
+	// ping can still find no stream there. The SDK refuses such a write before
+	// anything crosses the wire, which makes asking again safe; the bound is
+	// generous against an attach that takes microseconds.
+	for range 50 {
+		err := ss.Ping(ctx, nil)
+		if !errors.Is(err, errRejected) || ctx.Err() != nil {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return ss.Ping(ctx, nil)
+}
+
+// errRejected is the SDK's jsonrpc2.ErrRejected, which it does not export: a
+// message its transport refused to send. WireError matches on code alone.
+var errRejected = &jsonrpc.Error{Code: -32005}
+
 // newMCPServer builds the reference server: the SDK server with a minimal tool
 // surface, restricted to one era. Claiming another era is a fault
 // (capability_flip on the initialize result), not a second configuration
 // (docs/design/revisions.md section 4).
-func newMCPServer(name, title string, era revision.Revision) *mcp.Server {
-	var opts *mcp.ServerOptions
+func newMCPServer(name, title string, era revision.Revision, ask *asker) *mcp.Server {
+	opts := &mcp.ServerOptions{InitializedHandler: ask.initialized}
 	if era != "" {
-		opts = &mcp.ServerOptions{SupportedProtocolVersions: []string{string(era)}}
+		opts.SupportedProtocolVersions = []string{string(era)}
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Title: title}, opts)
 	mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "echoes its argument"},
@@ -244,12 +383,37 @@ func newMCPServer(name, title string, era revision.Revision) *mcp.Server {
 	return srv
 }
 
+// HTTPServer is the reference server over Streamable HTTP: the handler to
+// serve, and a way to have it ask a client a question.
+type HTTPServer struct {
+	handler http.Handler
+	ask     *asker
+}
+
+// ServeHTTP serves the SDK's handler, noting each session's standalone GET
+// stream as it arrives: that stream is the only way a question from this
+// server reaches the client.
+func (h *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if sid := r.Header.Get("Mcp-Session-Id"); r.Method == http.MethodGet && sid != "" {
+		h.ask.open(h.ask.listen, sid)
+	}
+	h.handler.ServeHTTP(w, r)
+}
+
+// Ping has the server ask the client holding sessionID a ping, once that
+// session has initialized and opened its standalone GET stream. The SDK sends
+// a request a server originates on that stream, so a client that never opens
+// one cannot be asked, and Ping waits until ctx ends.
+func (h *HTTPServer) Ping(ctx context.Context, sessionID string) error {
+	return h.ask.ping(ctx, sessionID)
+}
+
 // ServerHandler is the reference server as a Streamable HTTP handler, for the
 // hostile driver's HTTP mode: charpy stands this up and a proxy in front of it
 // faults its responses toward the client under test. A fresh server per
 // request keeps each of the client's connections independent, which is what
 // makes a reconnect a real reconnect.
-func ServerHandler(o Options) (http.Handler, error) {
+func ServerHandler(o Options) (*HTTPServer, error) {
 	if o.Era == revision.Draft {
 		return nil, fmt.Errorf("peer: no reference peer speaks %s", revision.Draft)
 	}
@@ -263,9 +427,13 @@ func ServerHandler(o Options) (http.Handler, error) {
 	if title == "" {
 		title = "charpy reference peer"
 	}
-	return mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.Era) }, nil,
-	), nil
+	ask := newAsker(o.Era, true)
+	return &HTTPServer{
+		handler: mcp.NewStreamableHTTPHandler(
+			func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.Era, ask) }, nil,
+		),
+		ask: ask,
+	}, nil
 }
 
 // DialHTTP connects the reference peer to an MCP server over Streamable HTTP

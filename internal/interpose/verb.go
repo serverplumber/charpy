@@ -1,6 +1,7 @@
 package interpose
 
 import (
+	"bytes"
 	"encoding/json"
 	"sync"
 	"time"
@@ -233,8 +234,52 @@ func (c Case) TranscriptFault() *transcript.Fault {
 // doing. Naming the id is what lets a reader tell the two apart.
 func (c Case) Rewrote(from, to envelope.Message) *transcript.Fault {
 	att := c.TranscriptFault()
-	if from.ID.Present() && (from.ID.Type() != to.ID.Type() || from.ID.Text() != to.ID.Text()) {
-		att.Replaced = from.ID
+	if replaces(from, to) {
+		att.Replaced, att.ReplacedKind = from.ID, from.Kind
 	}
 	return att
+}
+
+// Crossed settles the attribution of the frame a case matched, once its bytes
+// are final: from is the frame as the subject (or the peer) wrote it, to is
+// what charpy delivered in its place, body is the part of to that crossed, and
+// whole says whether all of it did, delimiter included.
+//
+// Two corrections, both about what the attribution claims.
+//
+// A frame that crossed byte for byte as written, and in full, carries none.
+// Several plans deliver the matched frame untouched beside what they inject --
+// a duplicate beside its original, a late answer beside the real one, a whole
+// event before a close -- and an attribution on such a frame marks it
+// tampered, so every layer drops the subject's real answer from its evidence.
+// The fault_applied event already records that the case acted, and when.
+//
+// A frame cut short names the id it hid. A cut is a rewrite whose replacement
+// is a prefix, and a prefix that stops mid-line or mid-event parses to no id,
+// so without this the answer it carried vanishes and the oracle reports the
+// subject as never having answered -- charpy's truncation, filed against
+// somebody else. It cannot be decided when the attribution is made, because the
+// cut is decided where the bytes are written.
+//
+// Only the matched frame goes through here. A frame charpy synthesized is
+// charpy's whether or not it matches anything, and keeps its attribution.
+func Crossed(att *transcript.Fault, from, to envelope.Message, body []byte, whole bool) *transcript.Fault {
+	if att == nil {
+		return nil
+	}
+	if whole && bytes.Equal(from.Raw(), to.Raw()) {
+		return nil
+	}
+	out := *att
+	if !whole {
+		if crossed, _ := envelope.Parse(body); replaces(from, crossed) {
+			out.Replaced, out.ReplacedKind = from.ID, from.Kind
+		}
+	}
+	return &out
+}
+
+// replaces reports whether to no longer carries the id from did.
+func replaces(from, to envelope.Message) bool {
+	return from.ID.Present() && (from.ID.Type() != to.ID.Type() || from.ID.Text() != to.ID.Text())
 }

@@ -83,28 +83,32 @@ func connectOnce(t *testing.T, endpoint string, era revision.Revision, call bool
 
 // The reconnect case HTTP unlocks: charpy narrows capabilities on the second
 // connection's initialize result, catching a client that cached the first.
+//
+// The shipped case, not a copy. Its matcher is what says "the reconnect": a
+// matcher naming only the upstream face fired on the first handshake too, and
+// a client that is narrowed from the start has nothing cached to misuse.
 func TestCapabilityFlipFiresOnReconnect(t *testing.T) {
-	c := interpose.Case{
-		ID:       "lifecycle/capability-narrowed-on-reconnect",
-		Citation: "lifecycle/capability-narrowed-on-reconnect@2025-11-25#seed=8f2c1a",
-		Match: interpose.Match{
-			Method:     interpose.ParseGlob("initialize"),
-			Kind:       "response",
-			Direction:  transcript.S2C,
-			Occurrence: 2, // the second connection's handshake
-		},
-		Fault: interpose.Fault{Kind: "capability_flip", Params: map[string]any{
-			"field": "capabilities", "direction_of_change": "narrow",
-		}},
-	}
-	r := driveHTTP(t, c, revision.V20251125, func(t *testing.T, endpoint string) {
+	r := driveHTTP(t, shipped(t, "lifecycle/capability-narrowed-on-reconnect"), revision.V20251125, func(t *testing.T, endpoint string) {
 		connectOnce(t, endpoint, revision.V20251125, false) // conn 1: full caps
 		connectOnce(t, endpoint, revision.V20251125, false) // conn 2: narrowed
 	})
 
-	if len(r.events(string(transcript.FaultApplied))) == 0 {
-		t.Fatalf("capability_flip never fired across two connections; scheduled: %v",
-			r.events(string(transcript.FaultScheduled)))
+	applied := r.events(string(transcript.FaultApplied))
+	if len(applied) != 1 {
+		t.Fatalf("capability_flip fired %d times across two connections, want once, on the second",
+			len(applied))
+	}
+
+	// The first handshake answer crossed untouched.
+	var initResults int
+	for _, l := range r.ofType("frame") {
+		if l["direction"] != string(transcript.S2C) || l["method"] != "initialize" {
+			continue
+		}
+		initResults++
+		if initResults == 1 && l["fault"] != nil {
+			t.Error("the first connection's handshake was narrowed; the case is about the reconnect")
+		}
 	}
 
 	// The faulted initialize result carries narrowed (empty) capabilities. The
