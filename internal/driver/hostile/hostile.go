@@ -19,6 +19,7 @@ package hostile
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -70,6 +71,10 @@ type Hostile struct {
 
 	toClient *wire.Stdio
 	toServer *wire.Stdio
+	// writeMu serialises every write, and the record of it: a held frame is
+	// released on the hold's own goroutine while the relay writes the same
+	// pipe.
+	writeMu sync.Mutex
 
 	// asks tracks the follow-up pings in flight, and asking keeps it to one at
 	// a time: a case with no ordinal faults every response, and a ping per
@@ -179,7 +184,7 @@ func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir
 		m, _ := envelope.Parse(raw)
 		// Capture a prior resolved id before this frame resolves, so
 		// already_resolved names an earlier answer and not the one in hand.
-		prior, _ := h.x.PriorResolved()
+		prior, _ := h.x.PriorResolved(dir)
 		h.x.Observe(m, dir)
 
 		if h.x.FollowUp(m, dir) {
@@ -196,13 +201,32 @@ func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir
 	}
 }
 
+// declaredOutput is the reference server's declared outputSchema for tool, or
+// nil when the tool declares none -- or when listing them failed, which leaves
+// a declared_output_schema case not applicable rather than guessing a shape.
+func declaredOutput(tool string) json.RawMessage {
+	if tool == "" {
+		return nil
+	}
+	schemas, err := peer.OutputSchemas()
+	if err != nil {
+		return nil
+	}
+	return schemas[tool]
+}
+
 // applyFault carries out a plan toward the client. The verb dance is the stdio
 // shim's -- delivery here is stdio too, since the client is on pipes -- kept as
 // a sibling for now (see notes): rewrite, synthesize, and the stream actions.
 func (h *Hostile) applyFault(ctx context.Context, c interpose.Case, m envelope.Message, dir transcript.Direction, to *wire.Stdio, prior envelope.ID) {
 	h.x.FaultEvent(transcript.FaultScheduled, c, nil)
 
-	plan, err := fault.Apply(c, m, fault.Context{RunSeed: h.o.RunSeed, Resolved: prior})
+	plan, err := fault.Apply(c, m, fault.Context{
+		RunSeed: h.o.RunSeed, Resolved: prior,
+		// charpy serves here, so the declaration a schema_violation breaks is
+		// its own reference server's, for the tool this answer is to.
+		OutputSchema: declaredOutput(h.x.ToolFor(m, dir)),
+	})
 	if err != nil {
 		h.x.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
 		h.deliver(m, dir, to, nil)
@@ -332,13 +356,16 @@ func (h *Hostile) deliverCut(m envelope.Message, orig *envelope.Message, dir tra
 	}
 	// As in the shim: only the matched frame is settled against what crossed.
 	if orig != nil {
-		att = interpose.Crossed(att, *orig, m, enc.Bytes[:n], n == enc.Len())
+		att = interpose.Crossed(att, *orig, m, n == enc.Len())
 	}
 	// Recorded before it is written, as the shim's is: the client may
 	// answer as soon as the bytes land, and its answer must not take the
 	// earlier seq.
+	h.writeMu.Lock()
 	h.x.Frame(dir, enc.Bytes[:n], att, nil)
-	if written, err := wire.EmitCut(to, enc, n); err != nil {
+	written, err := wire.EmitCut(to, enc, n)
+	h.writeMu.Unlock()
+	if err != nil {
 		h.x.Note(fmt.Sprintf("write failed after %d bytes: %v", written, err))
 	}
 }

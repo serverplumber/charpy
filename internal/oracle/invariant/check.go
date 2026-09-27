@@ -40,6 +40,9 @@ func Check(t *transcript.Transcript) oracle.Report {
 // exchange is what the oracle remembers about one request id on one
 // connection.
 type exchange struct {
+	// id is the request id as findings print it; the map an exchange lives in
+	// also keys it by the direction its request travelled.
+	id        string
 	requested []*transcript.FrameLine
 	answered  []*transcript.FrameLine
 
@@ -71,11 +74,25 @@ func connections(t *transcript.Transcript) []connKey {
 }
 
 func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *transcript.Transcript) {
-	// Requests and answers are paired per connection and per id. Pairing
-	// across connections would be wrong for the same reason joining gateway
-	// faces on id is: an id is only unique within the exchange that issued it.
+	// Requests and answers are paired per connection, per id, and per the
+	// direction the request travelled. Pairing across connections would be
+	// wrong for the same reason joining gateway faces on id is: an id is only
+	// unique within the exchange that issued it. And JSON-RPC ids are the
+	// sender's: a client's request 1 and its server's request 1 are two
+	// exchanges, so an answer is paired with the requests that came the other
+	// way to it.
 	exchanges := map[string]*exchange{}
 	var order []string
+	file := func(origin transcript.Direction, id string) *exchange {
+		k := string(origin) + "|" + id
+		e, ok := exchanges[k]
+		if !ok {
+			e = &exchange{id: id}
+			exchanges[k] = e
+			order = append(order, k)
+		}
+		return e
+	}
 
 	for _, f := range t.Frames() {
 		if f.Face != key.face || deref(f.ConnID) != key.conn {
@@ -84,14 +101,17 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 		// A frame charpy rewrote away still answers the id it used to carry,
 		// which the fault attribution names. Filed under that id rather than
 		// under whatever the replacement parses to -- usually nothing.
-		if r := replacedKey(f); r != "" {
-			e, ok := exchanges[r]
-			if !ok {
-				e = &exchange{}
-				exchanges[r] = e
-				order = append(order, r)
+		//
+		// And only there. What its bytes parse to is not an answer that
+		// arrived: a line cut before its newline is whole JSON still carrying
+		// the id, and the recipient never read it.
+		// A replaced request is filed nowhere: the subject never received it.
+		if f.Fault != nil && f.Fault.Replaced != nil {
+			if r := replacedKey(f); r != "" {
+				e := file(f.Direction.Opposite(), r)
+				e.replaced = append(e.replaced, f)
 			}
-			e.replaced = append(e.replaced, f)
+			continue
 		}
 
 		id := f.Key()
@@ -100,28 +120,24 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 			// is owed nothing.
 			continue
 		}
-		e, ok := exchanges[id]
-		if !ok {
-			e = &exchange{}
-			exchanges[id] = e
-			order = append(order, id)
-		}
 
 		switch f.Kind {
 		case "request":
+			e := file(f.Direction, id)
 			e.requested = append(e.requested, f)
 		case "response", "error":
+			e := file(f.Direction.Opposite(), id)
 			e.answered = append(e.answered, f)
 		}
 	}
 
 	died, diedAt := subjectDied(t)
 
-	for _, id := range order {
-		e := exchanges[id]
-		idResolvesOnce(rep, class, id, e, died, diedAt)
-		noUnsolicitedResponse(rep, class, id, e)
-		noDuplicateInflightID(rep, class, id, e)
+	for _, k := range order {
+		e := exchanges[k]
+		idResolvesOnce(rep, class, e.id, e, died, diedAt)
+		noUnsolicitedResponse(rep, class, e.id, e)
+		noDuplicateInflightID(rep, class, e.id, e)
 	}
 }
 

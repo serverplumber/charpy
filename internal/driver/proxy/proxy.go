@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -49,6 +50,13 @@ type Options struct {
 	// asks, through [Proxy.Ask], once its script is done.
 	Applied func(sessionID string)
 
+	// OutputSchemas is the outputSchema each tool declares, by name, where
+	// charpy knows the declaration because it is serving: the hostile HTTP
+	// mode's own reference server. Nil in front of a real server, where a
+	// schema_violation against the declared output does not apply until
+	// charpy reads the declaration itself.
+	OutputSchemas map[string]json.RawMessage
+
 	// AnswerDestroyed has charpy answer its own peer when a fault leaves the
 	// peer's request without the id it carried. The subject's answer to such
 	// a request is still recorded -- it is the reaction being judged -- but
@@ -81,6 +89,13 @@ type Proxy struct {
 	// yet -- the initialize that establishes one. Each such handshake is its
 	// own connection.
 	nextConn atomic.Int64
+
+	// sessions maps a session id to the connection its handshake opened on.
+	// The initialize that establishes a session carries no id, so it is named
+	// before the session exists; without this, the handshake and everything
+	// after it would be two connections, and a fault on the handshake's
+	// answer could never be followed by a question on the same one.
+	sessions sync.Map // session id -> connection id
 
 	// faulting is held while a fault is applied, up to its fault_applied
 	// line, and applied counts those lines. A faulted event reaches the
@@ -142,7 +157,7 @@ func (p *Proxy) RecordProbe(method string, outcome transcript.ProbeOutcome, elap
 // Note records a harness annotation on sessionID's connection, for a caller
 // acting on the proxy's traffic from outside a handler.
 func (p *Proxy) Note(sessionID, text string) {
-	p.x.Conn(p.o.ClientID, sessionID, sessionID).Note(text)
+	p.connFor(sessionID).Note(text)
 }
 
 // Askable reports whether a fault has acted in this run, so that a follow-up
@@ -163,7 +178,16 @@ func (p *Proxy) Askable() bool {
 // case's reach (exchange.Conn.Ask). The returned func withdraws the mark if
 // the question never crossed.
 func (p *Proxy) Ask(sessionID string, dir transcript.Direction) (withdraw func()) {
-	return p.x.Conn(p.o.ClientID, sessionID, sessionID).Ask(dir)
+	return p.connFor(sessionID).Ask(dir)
+}
+
+// faultContext is what a mechanism is told about the frame it acts on.
+func (p *Proxy) faultContext(conn *exchange.Conn, m envelope.Message, dir transcript.Direction, prior envelope.ID) fault.Context {
+	ctx := fault.Context{RunSeed: p.o.RunSeed, Resolved: prior}
+	if tool := conn.ToolFor(m, dir); tool != "" {
+		ctx.OutputSchema = p.o.OutputSchemas[tool]
+	}
+	return ctx
 }
 
 // faultApplied records that a fault acted on a frame travelling dir, and hands
@@ -252,8 +276,8 @@ func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose
 	defer release()
 
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
-	prior, _ := conn.PriorResolved()
-	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
+	prior, _ := conn.PriorResolved(transcript.C2S)
+	plan, err := fault.Apply(c, m, p.faultContext(conn, m, transcript.C2S, prior))
 	switch {
 	case err != nil:
 		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
@@ -294,7 +318,7 @@ func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose
 				send, whole = raw[:at], false
 			}
 		}
-		sentAtt = interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, send, whole)
+		sentAtt = interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, whole)
 	}
 	crossed, _ := envelope.Parse(send)
 	conn.Frame(transcript.C2S, crossed.Raw(), sentAtt, requestHTTP(r))
@@ -405,16 +429,27 @@ func (d *discard) Flush()                      {}
 // conn identifies the connection a request belongs to. A reconnecting client
 // is more than one connection, and the ledger must see that: an id resolved on
 // one is not the same id resolved on another, so keying them together would
-// invent a duplicate. Mcp-Session-Id is that identity where the client has one
-// yet; the initialize that establishes a session carries none, so it gets a
-// fresh id of its own -- which is correct, since each handshake is a distinct
-// connection's opening.
+// invent a duplicate. The initialize that establishes a session carries no
+// session id, so it gets a fresh connection id of its own -- each handshake is
+// a distinct connection's opening -- and every later request carrying the
+// session id that handshake established is on that same connection.
 func (p *Proxy) conn(r *http.Request) *exchange.Conn {
 	sid := r.Header.Get("Mcp-Session-Id")
 	if sid == "" {
-		sid = "c-" + strconv.FormatInt(p.nextConn.Add(1), 10)
+		id := "c-" + strconv.FormatInt(p.nextConn.Add(1), 10)
+		return p.x.Conn(p.o.ClientID, id, id)
 	}
-	return p.x.Conn(p.o.ClientID, sid, sid)
+	return p.connFor(sid)
+}
+
+// connFor is the connection a session lives on: the one its handshake opened,
+// or, for a session charpy never saw established, one named after it.
+func (p *Proxy) connFor(sid string) *exchange.Conn {
+	id := sid
+	if v, ok := p.sessions.Load(sid); ok {
+		id = v.(string)
+	}
+	return p.x.Conn(p.o.ClientID, sid, id)
 }
 
 // forward sends the client's request on to the subject, headers and all, so
@@ -442,6 +477,15 @@ func (p *Proxy) forward(r *http.Request, body []byte) (*http.Response, error) {
 func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) {
 	copyHeaders(w.Header(), resp.Header)
 
+	// A handshake's answer names the session it established: bind it to the
+	// connection the handshake was on, before anything else of the session's
+	// can cross.
+	if resp.Request.Header.Get("Mcp-Session-Id") == "" {
+		if sid := resp.Header.Get("Mcp-Session-Id"); sid != "" {
+			p.sessions.LoadOrStore(sid, conn.ConnID())
+		}
+	}
+
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
 		p.relaySSE(w, resp, conn)
 		return
@@ -459,7 +503,7 @@ func (p *Proxy) relayJSON(w http.ResponseWriter, resp *http.Response, conn *exch
 		conn.Note(fmt.Sprintf("reading subject response: %v", err))
 	}
 	m, _ := envelope.Parse(body)
-	prior, _ := conn.PriorResolved()
+	prior, _ := conn.PriorResolved(transcript.S2C)
 	conn.Observe(m, transcript.S2C)
 
 	att, out, applied := p.planJSON(m, prior, conn, resp, len(bytes.TrimSpace(body)) == 0)
@@ -501,7 +545,7 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 	defer p.faulting.Unlock()
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
 
-	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
+	plan, err := fault.Apply(c, m, p.faultContext(conn, m, transcript.S2C, prior))
 	if err != nil {
 		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
 		return nil, m, false
@@ -513,7 +557,7 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 	if plan.Deliver == nil {
 		return nil, m, false
 	}
-	att := interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, plan.Deliver.Raw(), true)
+	att := interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, true)
 	p.inter.Rewrite(conn.FrameOf(m, transcript.S2C), c, m, *plan.Deliver)
 	p.faultApplied(conn, c, plan.Verb(), transcript.S2C, resp)
 	return att, *plan.Deliver, true
@@ -541,7 +585,7 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 		}
 
 		m, _ := envelope.Parse(unit.Body())
-		prior, _ := conn.PriorResolved()
+		prior, _ := conn.PriorResolved(transcript.S2C)
 		conn.Observe(m, transcript.S2C)
 
 		var cases []interpose.Case
@@ -597,7 +641,7 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 	defer p.faulting.Unlock()
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
 
-	plan, err := fault.Apply(c, m, fault.Context{RunSeed: p.o.RunSeed, Resolved: prior})
+	plan, err := fault.Apply(c, m, p.faultContext(conn, m, transcript.S2C, prior))
 	if err != nil {
 		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
 		p.emitEvent(sse, unit, transcript.S2C, nil, resp, conn)
@@ -628,7 +672,7 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 	case plan.Deliver != nil:
 		p.inter.Rewrite(f, c, m, *plan.Deliver)
 		p.emitEvent(sse, wire.EncodeEvent("message", plan.Deliver.Raw(), ""), transcript.S2C,
-			interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, plan.Deliver.Raw(), true), resp, conn)
+			interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, true), resp, conn)
 	}
 
 	for _, extra := range plan.After {
@@ -674,7 +718,7 @@ func (p *Proxy) emitCut(sse *wire.SSE, unit wire.Encoded, from envelope.Message,
 	}
 	sent := unit.BodySent(n)
 	crossed, _ := envelope.Parse(sent)
-	conn.Frame(dir, crossed.Raw(), interpose.Crossed(att, from, from, sent, n == unit.Len()), sseHTTP(resp, unit))
+	conn.Frame(dir, crossed.Raw(), interpose.Crossed(att, from, from, n == unit.Len()), sseHTTP(resp, unit))
 	if _, err := wire.EmitCut(sse, unit, n); err != nil {
 		conn.Note(fmt.Sprintf("writing cut event: %v", err))
 	}

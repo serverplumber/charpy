@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -261,4 +263,50 @@ func contains(hay []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// The reference server serves add_numbers -- the tool the SDK's conformance
+// client calls in its tools_call scenario -- with a declared outputSchema,
+// which is what a schema_violation against the declared output breaks.
+func TestTheReferenceServerDeclaresAddNumbersOutput(t *testing.T) {
+	h, err := peer.ServerHandler(peer.Options{Era: revision.V20251125})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var add *mcp.Tool
+	for _, tl := range listed.Tools {
+		if tl.Name == "add_numbers" {
+			add = tl
+		}
+	}
+	if add == nil {
+		t.Fatal("the reference server does not serve add_numbers")
+	}
+	if add.OutputSchema == nil {
+		t.Error("add_numbers declares no outputSchema")
+	}
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "add_numbers", Arguments: map[string]any{"a": 5, "b": 3}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := res.StructuredContent.(map[string]any); got["sum"] != float64(8) {
+		t.Errorf("structuredContent = %v, want sum 8", res.StructuredContent)
+	}
 }

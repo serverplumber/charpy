@@ -78,21 +78,47 @@ func (c *Core) Conn(clientID, sessionID, connID string) *Conn {
 
 // Observe keeps the ledger current and, on the handshake response, settles the
 // negotiated revision.
+//
+// Requests are recorded whichever way they travel, and answers resolve against
+// the requests that came the other way: a server asks its client things too,
+// and the client's answer is only attributable to the request it answers.
 func (n *Conn) Observe(m envelope.Message, dir transcript.Direction) {
-	switch {
-	case m.Kind == envelope.KindRequest && dir == transcript.C2S:
-		n.core.Ledger.Originate(n.core.Face, n.connID, interpose.Exchange{IntentID: m.ID, Method: m.Method})
-	case m.Kind == envelope.KindResponse && dir == transcript.S2C:
-		n.core.Ledger.Resolve(n.core.Face, n.connID, m.ID)
-		n.core.settleRevision(m)
+	switch m.Kind {
+	case envelope.KindRequest:
+		n.core.Ledger.Originate(n.core.Face, n.connID, dir,
+			interpose.Exchange{IntentID: m.ID, Method: m.Method, Tool: toolOf(m)})
+	case envelope.KindResponse, envelope.KindError:
+		n.core.Ledger.Resolve(n.core.Face, n.connID, dir.Opposite(), m.ID)
+		if m.Kind == envelope.KindResponse && dir == transcript.S2C {
+			n.core.settleRevision(m)
+		}
 	}
 }
 
-// PriorResolved is the id most recently resolved on this connection, read
-// before the current frame resolves so already_resolved names an earlier
-// answer and not the one in hand.
-func (n *Conn) PriorResolved() (envelope.ID, bool) {
-	return n.core.Ledger.LatestResolved(n.core.Face, n.connID)
+// ToolFor is the tool named by the call an answer travelling dir answers, or
+// "" when it answers something else.
+func (n *Conn) ToolFor(m envelope.Message, dir transcript.Direction) string {
+	tool, _ := n.core.Ledger.ToolFor(n.core.Face, n.connID, dir.Opposite(), m.ID)
+	return tool
+}
+
+// toolOf is the tool a tools/call request names.
+func toolOf(m envelope.Message) string {
+	if m.Method != "tools/call" {
+		return ""
+	}
+	var p struct {
+		Name string `json:"name"`
+	}
+	_ = json.Unmarshal(m.Params, &p)
+	return p.Name
+}
+
+// PriorResolved is the id most recently resolved among the requests an answer
+// travelling dir would answer, read before the current frame resolves so
+// already_resolved names an earlier answer and not the one in hand.
+func (n *Conn) PriorResolved(dir transcript.Direction) (envelope.ID, bool) {
+	return n.core.Ledger.LatestResolved(n.core.Face, n.connID, dir.Opposite())
 }
 
 // settleRevision writes the header once the handshake response says what the
@@ -176,7 +202,7 @@ func (n *Conn) Frame(dir transcript.Direction, raw []byte, att *transcript.Fault
 	var method string
 	switch crossed.Kind {
 	case envelope.KindResponse, envelope.KindError:
-		method, _ = n.core.Ledger.MethodFor(n.core.Face, n.connID, crossed.ID)
+		method, _ = n.core.Ledger.MethodFor(n.core.Face, n.connID, dir.Opposite(), crossed.ID)
 	}
 
 	link := transcript.Link{Via: transcript.ViaNone}

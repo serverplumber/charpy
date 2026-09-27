@@ -132,10 +132,13 @@ func (s *Script) Run(ctx context.Context) error {
 		withdraw()
 	}
 
-	// Liveness: after a fault has acted, does the subject serve again within
-	// the budget? Only when the case asked (a budget) and a fault actually
-	// interrupted the stimulus -- a clean script had nothing to recover from.
-	if s.o.Case.LivenessWithinMS > 0 && faultInterrupted(scriptErr) {
+	// Recovery: after a fault has acted, does the subject serve a fresh
+	// session within the budget? Only when the case asked (a budget), and
+	// whenever a fault acted -- not only when it broke the script. A fault
+	// that leaves the script whole, an answer to nothing sent beside a
+	// request, can still take a server down, and the fresh session is where
+	// that shows even if the old one survived.
+	if s.o.Case.LivenessWithinMS > 0 && s.proxy.Askable() {
 		s.livenessProbe()
 	}
 
@@ -187,13 +190,6 @@ func (s *Script) shutdown() {
 	if err := s.srv.Shutdown(ctx); err != nil {
 		_ = s.srv.Close()
 	}
-}
-
-// faultInterrupted reports whether a fault broke the stimulus -- a call the
-// wire cut, or a hold released. A finished script had nothing to recover from,
-// so it gets no probe.
-func faultInterrupted(err error) bool {
-	return errors.Is(err, scenario.ErrStimulusInterrupted) || errors.Is(err, scenario.ErrWithdrawn)
 }
 
 func cleanEnd(err error) bool {

@@ -250,3 +250,62 @@ func TestAStatelessServerAsksNothing(t *testing.T) {
 		}
 	}
 }
+
+// A fault on the handshake's answer is followed by a question on the same
+// connection. The handshake is named before its session exists, and once
+// every later frame of the session was a different connection, so the
+// server's ping could never be read as the answer to a handshake fault.
+func TestAFaultOnTheHandshakeIsFollowedOnItsConnection(t *testing.T) {
+	c := interpose.Case{
+		ID:       "lifecycle/capability-narrowed",
+		Citation: "lifecycle/capability-narrowed@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("initialize"), Direction: transcript.S2C, Kind: "response",
+		},
+		Fault: interpose.Fault{Kind: "capability_flip", Params: map[string]any{
+			"field": "capabilities", "direction_of_change": "narrow",
+		}},
+	}
+	got := httpRun(t, c, func(context.Context, *mcp.ClientSession) {})
+
+	drivertest.FollowUpAnswered(t, got)
+	drivertest.ReactionAnswered(t, got)
+}
+
+// The same over HTTP, where charpy serves through its proxy: the proxy is told
+// the reference server's declarations, and the answer to add_numbers crosses
+// with its structuredContent broken against the one it declared.
+func TestADeclaredOutputSchemaIsBrokenOverHTTP(t *testing.T) {
+	c := interpose.Case{
+		ID:       "schema/output-schema-violated",
+		Citation: "schema/output-schema-violated@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Face: transcript.Upstream,
+			Direction: transcript.S2C, Kind: "response",
+		},
+		Fault: interpose.Fault{Kind: "schema_violation", Params: map[string]any{
+			"target": "declared_output_schema", "how": "wrong_type",
+		}},
+	}
+	got := httpRun(t, c, func(ctx context.Context, cs *mcp.ClientSession) {
+		_, _ = cs.ListTools(ctx, nil)
+		_, _ = cs.CallTool(ctx, &mcp.CallToolParams{Name: "add_numbers", Arguments: map[string]any{"a": 5, "b": 3}})
+	})
+
+	if n := len(got.Events(transcript.FaultApplied)); n != 1 {
+		t.Fatalf("fault_applied %d times, want once", n)
+	}
+	var broken bool
+	for _, f := range got.Frames() {
+		if f.Fault == nil || f.Direction != transcript.S2C {
+			continue
+		}
+		b, _ := f.Bytes()
+		if strings.Contains(string(b), `"structuredContent":{"sum":"not a number"}`) {
+			broken = true
+		}
+	}
+	if !broken {
+		t.Error("the answer to add_numbers did not cross broken against its declared schema")
+	}
+}

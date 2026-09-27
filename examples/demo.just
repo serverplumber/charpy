@@ -82,9 +82,11 @@ demo-http: demo-build
 #
 # The client under test drives, so charpy arms every applicable case and ends on
 # a signal rather than on a finished script. Here the client is the SDK's
-# everything-client, which picks its scenario from MCP_CONFORMANCE_SCENARIO;
-# against your own client, start it however you normally do and point it at the
-# address charpy is serving.
+# everything-client, which picks its scenario from MCP_CONFORMANCE_SCENARIO:
+# tools_call lists tools and calls add_numbers, which charpy's reference server
+# serves, so the faults aimed at tools/call have an answer to land on. Against
+# your own client, start it however you normally do and point it at the address
+# charpy is serving.
 [doc('A real SDK client connects to charpy, which serves it hostile')]
 demo-hostile-http: demo-build
     #!/usr/bin/env bash
@@ -96,7 +98,7 @@ demo-hostile-http: demo-build
     until curl -s -o /dev/null http://127.0.0.1:8080/; do sleep 0.1; done
     # A client the fault broke exits non-zero, which is the fault working: the
     # transcript and the oracle own that judgment, not the client's exit code.
-    MCP_CONFORMANCE_SCENARIO=initialize \
+    MCP_CONFORMANCE_SCENARIO=tools_call \
         {{ex_bin}}/everything-client http://127.0.0.1:8080/ || true
 
 # Clone and build github/github-mcp-server, a subject nobody here maintains.

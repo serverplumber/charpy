@@ -103,7 +103,8 @@ summary      = "A request body ends mid-frame, as a client that died mid-write l
   cut_at = "mid_frame"
 
   [case.expect]
-  expect_http_status = 400
+  expect_http_status       = 400
+  liveness_probe_within_ms = 15000
 
 # --- id ---------------------------------------------------------------------
 
@@ -263,7 +264,8 @@ summary      = "A request body with unbalanced braces; the server must reject it
   kind = "malformed_json"
 
   [case.expect]
-  expect_http_status = 400
+  expect_http_status       = 400
+  liveness_probe_within_ms = 15000
 
 # --- schema -----------------------------------------------------------------
 
@@ -356,3 +358,24 @@ summary      = "The peer reconnects claiming fewer capabilities than before; a c
   kind                = "capability_flip"
   field               = "capabilities"
   direction_of_change = "narrow"
+
+[[case]]
+id           = "lifecycle/server-request-unanswered"
+applies_to   = "<2026-07-28"
+subject      = ["server", "gateway"]
+transport    = ["stdio"]
+verdict      = "OBSERVED"
+derives_from = "none"
+summary      = "The client holds back its answer to the server's own sampling request, then fails it; the server must answer its caller and keep serving."
+
+  [case.match]
+  method    = "sampling/createMessage"
+  face      = "downstream"
+  direction = "c2s"
+  kind      = "response"
+
+  [case.fault]
+  kind              = "hang"
+  scope             = "response"
+  withdraw_after_ms = 2000
+  then              = "error"

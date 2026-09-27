@@ -138,6 +138,12 @@ layer 1 over any run, where the subject's own untouched frame is what the schema
 (`oracle.md` §3). *Injecting* a break makes the violating frame charpy's, and layer 1 rightly
 refuses to hold charpy's frames against anyone.
 
+Built where charpy serves -- the hostile drivers, over stdio and HTTP -- because there the declaration
+is charpy's own: the reference peer lists its tools' `outputSchema` as a client sees them, and the
+mechanism breaks `structuredContent` against the one for the tool the answer is to. Where charpy
+relays a real server it would first have to read the declaration with its own `tools/list`; that
+is not built, and the target does not apply there.
+
 ### `duplicate_id`
 
 Reuse a JSON-RPC id.

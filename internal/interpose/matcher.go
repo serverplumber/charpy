@@ -69,7 +69,8 @@ func (m *Matcher) methodFor(f Frame) string {
 	}
 	switch f.Kind {
 	case envelope.KindResponse, envelope.KindError:
-		if method, ok := m.ledger.MethodFor(f.Face, f.ConnID, f.ID); ok {
+		// An answer answers a request that came the other way.
+		if method, ok := m.ledger.MethodFor(f.Face, f.ConnID, f.Direction.Opposite(), f.ID); ok {
 			return method
 		}
 	}

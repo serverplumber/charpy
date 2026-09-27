@@ -2,6 +2,7 @@ package hostile_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"strings"
@@ -338,6 +339,18 @@ func TestShippedCasesLandOnTheCallNotTheHandshake(t *testing.T) {
 			if n := len(r.events(string(transcript.FaultApplied))); n != 1 {
 				t.Errorf("fault_applied %d times, want once", n)
 			}
+			// Corrupted, or cut before its newline, the answer never arrived
+			// as a frame, so it names the id it carried -- even when, as for
+			// mid_line, its JSON is whole and still parses to that id.
+			for _, l := range r.ofType("frame") {
+				f, _ := l["fault"].(map[string]any)
+				if f == nil || l["direction"] != string(transcript.S2C) {
+					continue
+				}
+				if rep, _ := f["replaced"].(map[string]any); rep["kind"] != "response" {
+					t.Errorf("the damaged answer does not name what it replaced: %v", f)
+				}
+			}
 			var initAnswered bool
 			for _, l := range r.ofType("frame") {
 				if l["direction"] != string(transcript.S2C) || l["method"] != "initialize" {
@@ -354,4 +367,51 @@ func TestShippedCasesLandOnTheCallNotTheHandshake(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Where charpy serves, the declaration is its own: add_numbers declares a
+// numeric sum, and the shipped case breaks structuredContent against it. What
+// the client then does is its reaction, and the run's to report, not this
+// test's to require: the spec says clients SHOULD validate structured results
+// (2025-11-25 server/tools), and the pinned Go SDK client does not -- it
+// accepts the broken sum.
+func TestADeclaredOutputSchemaIsBrokenTowardTheClient(t *testing.T) {
+	var callErr error
+	r := drive(t, shipped(t, "schema/output-schema-violated"), revision.V20251125, func(t *testing.T, cs *mcp.ClientSession) {
+		cctx, cc := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cc()
+		// A client can only validate against a schema it has seen.
+		if _, err := cs.ListTools(cctx, nil); err != nil {
+			t.Fatalf("listing tools: %v", err)
+		}
+		_, callErr = cs.CallTool(cctx, &mcp.CallToolParams{
+			Name: "add_numbers", Arguments: map[string]any{"a": 5, "b": 3},
+		})
+	})
+
+	if n := len(r.events(string(transcript.FaultApplied))); n != 1 {
+		t.Fatalf("fault_applied %d times, want once; scheduled: %v", n, r.events(string(transcript.FaultScheduled)))
+	}
+	var broken bool
+	for _, l := range r.ofType("frame") {
+		if l["fault"] == nil || l["direction"] != string(transcript.S2C) {
+			continue
+		}
+		raw, _ := base64.StdEncoding.DecodeString(l["raw"].(string))
+		var got struct {
+			Result struct {
+				StructuredContent map[string]any `json:"structuredContent"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatalf("the violation is not valid JSON: %v", err)
+		}
+		if _, isNumber := got.Result.StructuredContent["sum"].(float64); !isNumber {
+			broken = true
+		}
+	}
+	if !broken {
+		t.Error("no answer with structuredContent broken against the declared schema")
+	}
+	t.Logf("the client's call returned error %v", callErr)
 }

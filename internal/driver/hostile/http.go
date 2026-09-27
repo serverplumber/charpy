@@ -77,6 +77,10 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 	}
 
 	h := &HTTPServer{o: o, ref: ref, asking: map[string]bool{}}
+	// charpy serves here, so it knows the declarations a schema_violation
+	// against the declared output breaks. A failed listing leaves them nil,
+	// and such a case not applicable rather than guessing.
+	schemas, _ := peer.OutputSchemas()
 	pr, err := proxy.New(proxy.Options{
 		SubjectURL: "http://" + refLn.Addr().String() + "/",
 		// The client is the subject, faced upstream. charpy's reference server
@@ -93,6 +97,8 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		SessionID:  o.SessionID,
 		ConnID:     o.ConnID,
 		Applied:    h.ask,
+
+		OutputSchemas: schemas,
 	})
 	if err != nil {
 		_ = refLn.Close()

@@ -313,3 +313,60 @@ func TestADuplicateTheSubjectReceivedIsNotItsFinding(t *testing.T) {
 		t.Errorf("a finding against a server for a duplicate it received: %s %s", f.Check, f.Summary)
 	}
 }
+
+// A line cut before its newline is whole JSON still carrying its id, and the
+// recipient never read it. Neither an answer nor a request cut that way may
+// count as having arrived under the id it still parses to.
+func TestAFrameCutShortOfItsDelimiterDidNotArrive(t *testing.T) {
+	cut := func(id envelope.ID, kind envelope.Kind) *transcript.Fault {
+		return &transcript.Fault{
+			CaseID: "stream/truncate-mid-line", Citation: "stream/truncate-mid-line@2025-11-25#seed=8f2c1a",
+			Kind: "truncate", Replaced: id, ReplacedKind: kind,
+		}
+	}
+
+	t.Run("an answer", func(t *testing.T) {
+		b := oracletest.New(t, transcript.ClassServer).ToSubject(req("7", "tools/call"))
+		b.Raw(transcript.S2C, res("7"), cut(envelope.NumberID(7), envelope.KindResponse))
+		var replaced bool
+		for _, f := range invariant.Check(b.Done()).Findings {
+			if f.Reason == "charpy-replaced-the-answer" {
+				replaced = true
+			}
+		}
+		if !replaced {
+			t.Error("an answer cut before its newline was counted as having arrived")
+		}
+	})
+
+	t.Run("a request", func(t *testing.T) {
+		b := oracletest.New(t, transcript.ClassServer)
+		b.Raw(transcript.C2S, req("7", "tools/call"), cut(envelope.NumberID(7), envelope.KindRequest))
+		if fs := invariant.Check(b.Done()).Findings; len(fs) != 0 {
+			t.Errorf("a request the subject never read was held against it: %+v", fs)
+		}
+	})
+}
+
+// JSON-RPC ids are the sender's. A client's request 1 and a server's request
+// 1 are two exchanges, and an answer to one is no answer to the other: here
+// the server answered the client's initialize, and the client never answered
+// the server's ping, which shares its id.
+func TestEachSendersIDsAreTheirOwn(t *testing.T) {
+	got := invariant.Check(oracletest.New(t, transcript.ClassClient).
+		FromSubject(req("1", "initialize")).
+		ToSubject(res("1")).
+		ToSubject(req("1", "ping")).
+		Done())
+
+	var neverAnswered bool
+	for _, f := range got.Findings {
+		if f.Check == "id-resolves-once" && strings.Contains(f.Summary, "never answered") &&
+			strings.Contains(f.Detail, "ping") {
+			neverAnswered = true
+		}
+	}
+	if !neverAnswered {
+		t.Errorf("the client's unanswered ping was hidden by the answer to its initialize: %+v", got.Findings)
+	}
+}

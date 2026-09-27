@@ -404,3 +404,72 @@ func TestADuplicateRequestIsSentBesideTheOriginal(t *testing.T) {
 		t.Errorf("fault_applied direction = %q, want c2s", d)
 	}
 }
+
+// A session is one connection from its handshake on. The initialize that
+// establishes it carries no session id, so it is named before the session
+// exists; everything after it carries the session id, and belongs with it.
+func TestTheHandshakeIsOnItsSessionsConnection(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:       "test/observe",
+		Citation: "test/observe@2025-11-25#seed=8f2c1a",
+		// Matches nothing that crosses, so the run is a clean relay.
+		Match: interpose.Match{Kind: "error", Direction: transcript.S2C},
+		Fault: interpose.Fault{Kind: "malformed_json"},
+	}, revision.V20251125)
+
+	conns := map[any]bool{}
+	var sawInit, sawCall bool
+	for _, l := range r.ofType("frame") {
+		conns[l["conn_id"]] = true
+		switch l["method"] {
+		case "initialize":
+			sawInit = true
+		case "tools/call":
+			sawCall = true
+		}
+	}
+	if !sawInit || !sawCall {
+		t.Fatalf("want a handshake and a call; frames: %d", len(r.ofType("frame")))
+	}
+	if len(conns) != 1 {
+		t.Errorf("one session spans %d connections: %v", len(conns), conns)
+	}
+}
+
+// Recovery is asked after any fault that acted, when the case gives a budget --
+// not only after one that broke the script. An answer to nothing sent beside a
+// request leaves the script whole, and whether the server still serves a
+// fresh session afterwards is the same question.
+func TestRecoveryIsProbedAfterAFaultThatLeftTheScriptWhole(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:       "id/unsolicited-to-server",
+		Citation: "id/unsolicited-to-server@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Direction: transcript.C2S, Kind: "request",
+		},
+		Fault:            interpose.Fault{Kind: "unsolicited_response", Params: map[string]any{"id_source": "never_used"}},
+		LivenessWithinMS: 10000,
+	}, revision.V20251125)
+
+	probes := r.events(string(transcript.Probe))
+	if len(probes) != 1 {
+		t.Fatalf("want one probe after the fault, got %d", len(probes))
+	}
+	if d, _ := probes[0]["detail"].(map[string]any); d["outcome"] != "ok" {
+		t.Errorf("probe outcome = %v, want ok", d["outcome"])
+	}
+}
+
+// A case with a budget but no fault that acted has nothing to recover from.
+func TestNoProbeWithoutAFault(t *testing.T) {
+	r := script(t, interpose.Case{
+		ID:               "test/observe",
+		Citation:         "test/observe@2025-11-25#seed=8f2c1a",
+		Match:            interpose.Match{Kind: "error", Direction: transcript.S2C},
+		Fault:            interpose.Fault{Kind: "malformed_json"},
+		LivenessWithinMS: 10000,
+	}, revision.V20251125)
+	if n := len(r.events(string(transcript.Probe))); n != 0 {
+		t.Errorf("%d probes after a run in which no fault acted", n)
+	}
+}

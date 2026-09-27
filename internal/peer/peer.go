@@ -2,6 +2,7 @@ package peer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -96,7 +97,7 @@ func NewClient(o Options) (*Client, error) {
 	return &Client{
 		Out:    charpyReads,
 		In:     charpyWrites,
-		client: mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, nil),
+		client: mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, clientOptions()),
 		era:    o.Era,
 		t: &mcp.IOTransport{
 			Reader:        peerReads,
@@ -362,6 +363,23 @@ func (a *asker) ping(ctx context.Context, id string) error {
 	return ss.Ping(ctx, nil)
 }
 
+// clientOptions configures the reference client. It answers sampling, so a
+// server under test that asks its client for a completion mid-call gets an
+// answer -- and a case can withhold that answer, which is the only way to put
+// to a server the question of a request of its own that goes unanswered. The
+// answer is canned: charpy is not a model, and nothing judges what it says.
+func clientOptions() *mcp.ClientOptions {
+	return &mcp.ClientOptions{
+		CreateMessageHandler: func(context.Context, *mcp.CreateMessageRequest) (*mcp.CreateMessageResult, error) {
+			return &mcp.CreateMessageResult{
+				Role:    "assistant",
+				Model:   "charpy-reference-peer",
+				Content: &mcp.TextContent{Text: "ok"},
+			}, nil
+		},
+	}
+}
+
 // errRejected is the SDK's jsonrpc2.ErrRejected, which it does not export: a
 // message its transport refused to send. WireError matches on code alone.
 var errRejected = &jsonrpc.Error{Code: -32005}
@@ -376,11 +394,92 @@ func newMCPServer(name, title string, era revision.Revision, ask *asker) *mcp.Se
 		opts.SupportedProtocolVersions = []string{string(era)}
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Title: title}, opts)
+	addTools(srv)
+	return srv
+}
+
+// addTools registers the reference server's tools. It is its own function so
+// that OutputSchemas can list the same set from a server no client under test
+// will ever reach.
+func addTools(srv *mcp.Server) {
 	mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "echoes its argument"},
 		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
 		})
-	return srv
+	// add_numbers is the tool the SDK's conformance client calls in its
+	// tools_call scenario, so a real client under test has a call to make and
+	// a fault aimed at tools/call has an answer to land on. Its result is
+	// typed, so the SDK declares an outputSchema for it -- the declaration a
+	// schema_violation with target declared_output_schema breaks.
+	mcp.AddTool(srv, &mcp.Tool{Name: "add_numbers", Description: "adds two numbers"},
+		func(ctx context.Context, req *mcp.CallToolRequest, args AddArgs) (*mcp.CallToolResult, AddResult, error) {
+			return nil, AddResult{Sum: args.A + args.B}, nil
+		})
+}
+
+// OutputSchemas is the outputSchema each reference tool declares, by tool
+// name, exactly as a client's tools/list sees it -- which is what a
+// schema_violation against the declared output has to break. The SDK derives
+// a schema from a tool's result type when the tool is added, and keeps it to
+// itself, so the only faithful copy is the one it lists. It lists from a
+// throwaway server with the same tools, over the SDK's in-memory transport,
+// so no session a client under test could be confused with ever exists.
+func OutputSchemas() (map[string]json.RawMessage, error) {
+	schemasOnce.Do(func() { schemas, schemasErr = listOutputSchemas() })
+	return schemas, schemasErr
+}
+
+var (
+	schemasOnce sync.Once
+	schemas     map[string]json.RawMessage
+	schemasErr  error
+)
+
+func listOutputSchemas() (map[string]json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	srv := mcp.NewServer(&mcp.Implementation{Name: "charpy-schemas"}, nil)
+	addTools(srv)
+	st, ct := mcp.NewInMemoryTransports()
+	ss, err := srv.Connect(ctx, st, nil)
+	if err != nil {
+		return nil, fmt.Errorf("peer: listing reference tools: %w", err)
+	}
+	defer ss.Close()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "charpy-schemas"}, nil).Connect(ctx, ct, nil)
+	if err != nil {
+		return nil, fmt.Errorf("peer: listing reference tools: %w", err)
+	}
+	defer cs.Close()
+
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("peer: listing reference tools: %w", err)
+	}
+	out := map[string]json.RawMessage{}
+	for _, t := range listed.Tools {
+		if t.OutputSchema == nil {
+			continue
+		}
+		raw, err := json.Marshal(t.OutputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("peer: %s outputSchema: %w", t.Name, err)
+		}
+		out[t.Name] = raw
+	}
+	return out, nil
+}
+
+// AddArgs is add_numbers' input.
+type AddArgs struct {
+	A float64 `json:"a" jsonschema:"the first addend"`
+	B float64 `json:"b" jsonschema:"the second addend"`
+}
+
+// AddResult is add_numbers' structured output.
+type AddResult struct {
+	Sum float64 `json:"sum" jsonschema:"a plus b"`
 }
 
 // HTTPServer is the reference server over Streamable HTTP: the handler to
@@ -465,7 +564,7 @@ func DialHTTP(ctx context.Context, endpoint string, o Options) (*mcp.ClientSessi
 		title = "charpy reference peer"
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, clientOptions())
 	t := &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		DisableStandaloneSSE: true,

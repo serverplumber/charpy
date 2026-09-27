@@ -36,6 +36,19 @@ func TestMain(m *testing.M) {
 		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
 		})
+	// ask_model asks its client for a completion mid-call, which is how a
+	// server comes to have a request of its own outstanding.
+	mcp.AddTool(srv, &mcp.Tool{Name: "ask_model", Description: "asks the client's model"},
+		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+			got, err := req.Session.CreateMessage(ctx, &mcp.CreateMessageParams{
+				MaxTokens: 16,
+				Messages:  []*mcp.SamplingMessage{{Role: "user", Content: &mcp.TextContent{Text: "hi"}}},
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{got.Content}}, nil, nil
+		})
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintf(os.Stderr, "subject: %v\n", err)
 		os.Exit(1)
@@ -114,12 +127,12 @@ func TestRunCaseGlobWritesOneTranscriptPerCase(t *testing.T) {
 		t.Fatalf("exit %d, want 0\n%s", code, out)
 	}
 
-	// The three the catalogue puts to a server over stdio on this revision:
-	// frame/malformed-request, id/duplicate-request-inflight and
-	// id/unsolicited-to-server. A fourth would belong here rather than
-	// silently widening the glob.
+	// The four the catalogue puts to a server over stdio on this revision:
+	// frame/malformed-request, id/duplicate-request-inflight,
+	// id/unsolicited-to-server and lifecycle/server-request-unanswered. A
+	// fifth would belong here rather than silently widening the glob.
 	files := transcripts(t, dir)
-	if len(files) != 3 {
+	if len(files) != 4 {
 		t.Fatalf("wrote %d transcripts, want one per applicable case\n%s", len(files), out)
 	}
 
@@ -470,6 +483,12 @@ func TestRunAsksAFollowUpAfterTheFault(t *testing.T) {
 		t.Errorf("follow-up was %q, want ping at 2025-11-25", q.MethodName())
 	}
 	drivertest.ReactionAnswered(t, tr)
+
+	// The case declares a recovery budget, so a fresh session is tried too.
+	probes := tr.Events(transcript.Probe)
+	if len(probes) != 1 || probes[0].Detail["outcome"] != string(transcript.ProbeOK) {
+		t.Errorf("want one probe that recovered; got %d", len(probes))
+	}
 }
 
 // An auto run compiles each case once per revision the handshake could settle

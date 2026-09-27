@@ -56,6 +56,19 @@ func sdkSubject() int {
 		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
 		})
+	// ask_model asks its client for a completion mid-call, which is how a
+	// server comes to have a request of its own outstanding.
+	mcp.AddTool(srv, &mcp.Tool{Name: "ask_model", Description: "asks the client's model"},
+		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
+			got, err := req.Session.CreateMessage(ctx, &mcp.CreateMessageParams{
+				MaxTokens: 16,
+				Messages:  []*mcp.SamplingMessage{{Role: "user", Content: &mcp.TextContent{Text: "hi"}}},
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			return &mcp.CallToolResult{Content: []mcp.Content{got.Content}}, nil, nil
+		})
 	if err := srv.Run(context.Background(), &mcp.StdioTransport{}); err != nil {
 		fmt.Fprintf(os.Stderr, "sdk subject: %v\n", err)
 		return 1

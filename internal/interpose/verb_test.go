@@ -36,7 +36,7 @@ func TestRewriteRegistersItsInverse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l.Originate(transcript.Downstream, conn, interpose.Exchange{IntentID: intent.ID, Method: "tools/call"})
+	l.Originate(transcript.Downstream, conn, transcript.C2S, interpose.Exchange{IntentID: intent.ID, Method: "tools/call"})
 
 	wire, err := envelope.NewRequest(envelope.NumberID(9), "tools/call", nil)
 	if err != nil {
@@ -49,15 +49,15 @@ func TestRewriteRegistersItsInverse(t *testing.T) {
 	}
 
 	// The subject answers what crossed the wire.
-	back, rewritten := l.Untranslate(transcript.Downstream, conn, envelope.NumberID(9))
+	back, rewritten := l.Untranslate(transcript.Downstream, conn, transcript.C2S, envelope.NumberID(9))
 	if !rewritten || back.Text() != "7" {
 		t.Errorf("Untranslate(9) = %q,%v want 7,true", back.Text(), rewritten)
 	}
 	// And the exchange followed the id, so the method still resolves.
-	if m, ok := l.MethodFor(transcript.Downstream, conn, envelope.NumberID(9)); !ok || m != "tools/call" {
+	if m, ok := l.MethodFor(transcript.Downstream, conn, transcript.C2S, envelope.NumberID(9)); !ok || m != "tools/call" {
 		t.Errorf("MethodFor(9) = %q,%v; the exchange did not follow the rewrite", m, ok)
 	}
-	if _, ok := l.MethodFor(transcript.Downstream, conn, envelope.NumberID(7)); ok {
+	if _, ok := l.MethodFor(transcript.Downstream, conn, transcript.C2S, envelope.NumberID(7)); ok {
 		t.Error("the exchange is still keyed by the id that never crossed the wire")
 	}
 }
@@ -66,9 +66,9 @@ func TestRewriteRegistersItsInverse(t *testing.T) {
 // unconditionally rather than tracking which frames were touched.
 func TestUntranslateIsIdentityForUntouchedIDs(t *testing.T) {
 	_, l, _ := rig(t)
-	l.Originate(transcript.Downstream, conn, interpose.Exchange{IntentID: envelope.NumberID(3), Method: "ping"})
+	l.Originate(transcript.Downstream, conn, transcript.C2S, interpose.Exchange{IntentID: envelope.NumberID(3), Method: "ping"})
 
-	got, rewritten := l.Untranslate(transcript.Downstream, conn, envelope.NumberID(3))
+	got, rewritten := l.Untranslate(transcript.Downstream, conn, transcript.C2S, envelope.NumberID(3))
 	if rewritten {
 		t.Error("an untouched id reported as rewritten")
 	}
@@ -87,7 +87,7 @@ func TestRewriteOfRelayedTrafficStillRegisters(t *testing.T) {
 	i.Rewrite(frame(envelope.KindRequest, "ping"), testCase("id/vary"), intent, wire)
 
 	// vary_type: the number and the string must not merge.
-	back, ok := l.Untranslate(transcript.Downstream, conn, envelope.StringID("1"))
+	back, ok := l.Untranslate(transcript.Downstream, conn, transcript.C2S, envelope.StringID("1"))
 	if !ok || back.Type() != envelope.IDNumber {
 		t.Errorf(`Untranslate("1") = %v/%q, want the number 1`, back.Type(), back.Text())
 	}
@@ -261,23 +261,20 @@ func TestCrossedSettlesWhatTheAttributionClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw := answer.Raw()
-	line := append(append([]byte{}, raw...), '\n')
-
+	// Where the cut lands does not change what it hid: short of the
+	// delimiter, the frame never arrived, even when its JSON is whole and
+	// still carries the id -- a line cut before its newline never delimits.
 	for _, tc := range []struct {
 		name     string
-		body     []byte
 		whole    bool
 		want     bool // attributed at all
 		replaced bool
 	}{
-		{"cut mid-frame", raw[:len(raw)/2], false, true, true},
-		{"cut before any byte", nil, false, true, true},
-		{"cut before the newline only", raw, false, true, false},
-		{"delivered whole and untouched", line, true, false, false},
+		{"cut anywhere short of the delimiter", false, true, true},
+		{"delivered whole and untouched", true, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			att := interpose.Crossed(c.TranscriptFault(), answer, answer, tc.body, tc.whole)
+			att := interpose.Crossed(c.TranscriptFault(), answer, answer, tc.whole)
 			if (att != nil) != tc.want {
 				t.Fatalf("attributed = %v, want %v", att != nil, tc.want)
 			}
@@ -303,18 +300,18 @@ func TestCrossedSettlesWhatTheAttributionClaims(t *testing.T) {
 
 	// A rewrite delivered whole is still charpy's frame.
 	other, _ := envelope.Parse([]byte(`{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text"}]}}`))
-	if att := interpose.Crossed(c.Rewrote(answer, other), answer, other, other.Raw(), true); att == nil {
+	if att := interpose.Crossed(c.Rewrote(answer, other), answer, other, true); att == nil {
 		t.Error("a rewritten frame delivered whole lost its attribution")
 	}
 
 	// A destroyed request says it was a request.
 	req, _ := envelope.Parse([]byte(`{"jsonrpc":"2.0","id":2,"method":"tools/call"}`))
-	if att := interpose.Crossed(c.TranscriptFault(), req, req, req.Raw()[:5], false); att.ReplacedKind != envelope.KindRequest {
+	if att := interpose.Crossed(c.TranscriptFault(), req, req, false); att.ReplacedKind != envelope.KindRequest {
 		t.Errorf("replaced kind = %q, want request", att.ReplacedKind)
 	}
 
 	// A frame nothing faulted stays unattributed; settling never invents one.
-	if att := interpose.Crossed(nil, answer, answer, raw[:3], false); att != nil {
+	if att := interpose.Crossed(nil, answer, answer, false); att != nil {
 		t.Errorf("an unattributed frame gained an attribution: %+v", att)
 	}
 }

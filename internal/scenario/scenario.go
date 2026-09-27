@@ -80,6 +80,11 @@ func Basic(m interpose.Match, o Options) (Scenario, error) {
 	method := m.Method.String()
 	switch method {
 	case "", "*", "tools/call":
+	case "sampling/createMessage":
+		// The server asks this of its client, inside a call; charpy's peer
+		// cannot send it, but calling a tool that samples provokes it, and
+		// the case's matcher lands on the peer's answer. Which tool samples
+		// is the subject's to say, so the run names it with --tool.
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrCannotOriginate, method)
 	}

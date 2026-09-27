@@ -1,6 +1,7 @@
 package fault
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -74,6 +75,13 @@ type Context struct {
 	// unsolicited_response's already_resolved source. Absent when the ledger
 	// has none, which makes that case not apply rather than wrong.
 	Resolved envelope.ID
+
+	// OutputSchema is the outputSchema declared for the tool whose call the
+	// matched frame answers, for schema_violation's declared_output_schema
+	// target. A driver supplies it where it knows the declaration -- where
+	// charpy serves, the schema is its own -- and leaves it empty otherwise,
+	// which makes that target not apply rather than guess at a shape.
+	OutputSchema json.RawMessage
 }
 
 // Plan is what a mechanism does to one matched frame.
@@ -133,7 +141,7 @@ func Apply(c interpose.Case, m envelope.Message, ctx Context) (Plan, error) {
 	case "malformed_json":
 		return planned(planMalformedJSON(p, m, params, ctx))
 	case "schema_violation":
-		return planned(planSchemaViolation(p, m, params))
+		return planned(planSchemaViolation(p, m, params, ctx))
 	case "duplicate_id":
 		return planned(planDuplicateID(p, m, params))
 	case "unsolicited_response":

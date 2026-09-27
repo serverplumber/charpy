@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -132,15 +133,28 @@ func duplicateFirstKey(raw []byte) []byte {
 // schemaViolation emits valid JSON that violates a declared schema. It passes
 // every parser and fails only the oracle, which is what makes it the
 // interesting one.
-func planSchemaViolation(p Plan, m envelope.Message, params map[string]any) (Plan, error) {
+func planSchemaViolation(p Plan, m envelope.Message, params map[string]any, ctx Context) (Plan, error) {
 	target := str(params, "target", "result")
 	how := str(params, "how", "wrong_type")
 
 	switch target {
-	case "declared_output_schema", "tool_input_schema":
-		// These break a shape the *subject* declared, so charpy has to have
-		// read the declaration first. The driver asks with its own tools/list
-		// and replans; until then the case does not apply.
+	case "declared_output_schema":
+		// This breaks a shape somebody declared, so the declaration has to be
+		// in hand. Where charpy serves, it is charpy's own and the driver
+		// passes it; where charpy relays a real server it would have to ask
+		// with its own tools/list first, which is not built, so the case does
+		// not apply there rather than breaking a shape it has not read.
+		if len(ctx.OutputSchema) == 0 {
+			return Plan{}, fmt.Errorf("%w: schema_violation target %q with no declared schema in hand",
+				ErrNotApplicable, target)
+		}
+		out, err := violateDeclared(m, ctx.OutputSchema, how)
+		if err != nil {
+			return Plan{}, err
+		}
+		p.Deliver = &out
+		return p, nil
+	case "tool_input_schema":
 		return Plan{}, fmt.Errorf("%w: schema_violation target %q", ErrNotApplicable, target)
 	case "envelope":
 		out, err := violateEnvelope(m, how)
@@ -210,6 +224,90 @@ func violateResult(m envelope.Message, how string) (envelope.Message, error) {
 		return envelope.Message{}, fmt.Errorf("fault: schema_violation how = %q", how)
 	}
 	return remarshal(obj)
+}
+
+// violateDeclared breaks a result's structuredContent against the outputSchema
+// its tool declared: valid JSON-RPC, a valid CallToolResult, and wrong only
+// against the declaration -- which a client that validates structured output
+// is supposed to catch.
+//
+// The property it breaks is the first, by name, that the schema declares and
+// the content carries, so the fault is the same on every run without drawing
+// on the seed for a choice nothing reads.
+func violateDeclared(m envelope.Message, schema json.RawMessage, how string) (envelope.Message, error) {
+	if m.Kind != envelope.KindResponse {
+		return envelope.Message{}, fmt.Errorf("%w: declared_output_schema needs a result, got %s",
+			ErrNotApplicable, m.Kind)
+	}
+	var decl struct {
+		Properties map[string]struct {
+			Type any `json:"type"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+	if err := json.Unmarshal(schema, &decl); err != nil {
+		return envelope.Message{}, fmt.Errorf("fault: declared outputSchema is not a JSON object: %w", err)
+	}
+	obj, err := object(m.Raw())
+	if err != nil {
+		return envelope.Message{}, err
+	}
+	result, _ := obj["result"].(map[string]any)
+	content, _ := result["structuredContent"].(map[string]any)
+	if content == nil {
+		return envelope.Message{}, fmt.Errorf("%w: the result carries no structuredContent to break",
+			ErrNotApplicable)
+	}
+
+	names := make([]string, 0, len(decl.Properties))
+	for name := range decl.Properties {
+		if _, ok := content[name]; ok {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+
+	switch how {
+	case "wrong_type":
+		for _, name := range names {
+			if v, ok := wrongTypeFor(decl.Properties[name].Type); ok {
+				content[name] = v
+				return remarshal(obj)
+			}
+		}
+		return envelope.Message{}, fmt.Errorf("%w: no typed property to give the wrong type", ErrNotApplicable)
+	case "missing_required":
+		req := slices.Clone(decl.Required)
+		slices.Sort(req)
+		for _, name := range req {
+			if _, ok := content[name]; ok {
+				delete(content, name)
+				return remarshal(obj)
+			}
+		}
+		return envelope.Message{}, fmt.Errorf("%w: no required property present to remove", ErrNotApplicable)
+	default:
+		return envelope.Message{}, fmt.Errorf("%w: schema_violation how %q against a declared schema",
+			ErrNotApplicable, how)
+	}
+}
+
+// wrongTypeFor is a value of some type the declaration does not allow.
+func wrongTypeFor(declared any) (any, bool) {
+	t, _ := declared.(string)
+	switch t {
+	case "number", "integer":
+		return "not a number", true
+	case "string":
+		return 0, true
+	case "boolean":
+		return "not a boolean", true
+	case "object":
+		return "not an object", true
+	case "array":
+		return "not an array", true
+	}
+	return nil, false
 }
 
 // duplicateID reuses a JSON-RPC id.

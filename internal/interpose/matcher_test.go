@@ -10,10 +10,18 @@ import (
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
+// frame is a frame of the ordinary exchange: a client's request travelling
+// c2s, and the server's answer, or its notification, travelling s2c. The
+// ledger keys an exchange by the direction its request came, so the two have
+// to agree.
 func frame(kind envelope.Kind, method string) interpose.Frame {
+	dir := transcript.S2C
+	if kind == envelope.KindRequest {
+		dir = transcript.C2S
+	}
 	return interpose.Frame{
 		Face:      transcript.Downstream,
-		Direction: transcript.S2C,
+		Direction: dir,
 		Kind:      kind,
 		Method:    method,
 		ClientID:  "c0",
@@ -67,7 +75,7 @@ func TestMatcherPredicates(t *testing.T) {
 		},
 		{
 			name:  "direction match",
-			match: interpose.Match{Direction: transcript.S2C},
+			match: interpose.Match{Direction: transcript.C2S},
 			frame: frame(envelope.KindRequest, "tools/call"),
 			want:  true,
 		},
@@ -216,7 +224,7 @@ func TestMatcherResolvesAResponseMethodThroughTheLedger(t *testing.T) {
 	}))
 
 	id := envelope.NumberID(7)
-	l.Originate(transcript.Downstream, conn, interpose.Exchange{IntentID: id, Method: "tools/call"})
+	l.Originate(transcript.Downstream, conn, transcript.C2S, interpose.Exchange{IntentID: id, Method: "tools/call"})
 
 	resp := frame(envelope.KindResponse, "")
 	resp.ID = id
@@ -264,7 +272,7 @@ func TestScopeCountsWithinItsPopulation(t *testing.T) {
 func TestSelectReturnsEveryMatchingCaseInOrder(t *testing.T) {
 	l := interpose.NewLedger(clock.NewInjected())
 	m := interpose.NewMatcher(l,
-		caseWith("stream/a", interpose.Match{Direction: transcript.S2C}),
+		caseWith("stream/a", interpose.Match{Direction: transcript.C2S}),
 		caseWith("id/b", interpose.Match{Method: interpose.ParseGlob("tools/*")}),
 		caseWith("frame/c", interpose.Match{Face: transcript.Upstream}),
 	)

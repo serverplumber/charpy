@@ -95,10 +95,11 @@ type Shim struct {
 	o     Options
 	x     *exchange.Conn
 	inter *interpose.Interposer
-	// peerMu serialises what is written toward the other peer. Its answers
-	// arrive from the subject's relay, and an answer to a request charpy
-	// destroyed is written from the other one.
-	peerMu sync.Mutex
+	// writeMu serialises every write the shim makes, and the record of it.
+	// Each pipe has more than one writer: its relay, a held frame released
+	// on the hold's own goroutine, and toward the peer an answer to a request
+	// charpy destroyed, written from the other relay.
+	writeMu sync.Mutex
 
 	// match is swapped once, when an Arm run settles, from the goroutine
 	// relaying the handshake answer while the other relay reads it.
@@ -204,9 +205,9 @@ func (s *Shim) Run(ctx context.Context) error {
 		// the peer see the end of its input too: a request it is waiting on
 		// will never be answered, and a peer left waiting sits out its whole
 		// deadline to learn what the pipe already says.
-		s.peerMu.Lock()
+		s.writeMu.Lock()
 		_ = s.toPeer.Close()
-		s.peerMu.Unlock()
+		s.writeMu.Unlock()
 	}()
 
 	wg.Wait()
@@ -300,7 +301,7 @@ func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
 		}
 		m, _ := envelope.Parse(raw)
 
-		prior, _ := s.x.PriorResolved()
+		prior, _ := s.x.PriorResolved(dir)
 		s.x.Observe(m, dir)
 
 		if s.x.FollowUp(m, dir) {
@@ -462,7 +463,7 @@ func (s *Shim) deliverCut(m envelope.Message, orig *envelope.Message, dir transc
 	// orig is the frame the case matched, as the subject or the peer wrote
 	// it; a synthesized frame has none, and stays charpy's whatever crossed.
 	if orig != nil {
-		att = interpose.Crossed(att, *orig, m, enc.Bytes[:n], n == enc.Len())
+		att = interpose.Crossed(att, *orig, m, n == enc.Len())
 	}
 
 	// Both directions cross the subject's one face here: charpy sends to it
@@ -477,14 +478,10 @@ func (s *Shim) deliverCut(m envelope.Message, orig *envelope.Message, dir transc
 	// question, which the reaction layer would read as a request never
 	// answered. The bytes recorded are the same either way: n is settled
 	// before the write, and a short write is noted rather than re-recorded.
-	if to == s.toPeer {
-		s.peerMu.Lock()
-	}
+	s.writeMu.Lock()
 	s.x.Frame(dir, enc.Bytes[:n], att, nil)
 	written, err := wire.EmitCut(to, enc, n)
-	if to == s.toPeer {
-		s.peerMu.Unlock()
-	}
+	s.writeMu.Unlock()
 	if err != nil {
 		s.x.Note(fmt.Sprintf("write failed after %d bytes: %v", written, err))
 	}

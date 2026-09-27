@@ -69,7 +69,7 @@ type Rewritten struct {
 // reason the ledger is double-entry at all.
 func (i *Interposer) Rewrite(f Frame, c Case, intent, wire envelope.Message) Rewritten {
 	if !intent.ID.Equal(wire.ID) {
-		i.ledger.RegisterRewrite(f.Face, f.ConnID, intent.ID, wire.ID)
+		i.ledger.RegisterRewrite(f.Face, f.ConnID, f.Direction, intent.ID, wire.ID)
 	}
 	i.ledger.BeginConsequences(f.Face, f.ConnID, c)
 	return Rewritten{Case: c, Intent: intent, Wire: wire}
@@ -97,7 +97,12 @@ type Withheld struct {
 func (i *Interposer) Withhold(f Frame, c Case, m envelope.Message, after time.Duration) *Withheld {
 	w := &Withheld{c: c, m: m, at: -1, out: make(chan struct{})}
 	if after > 0 {
+		// Stored under the lock the callback takes. On the real clock the
+		// callback runs on a goroutine of its own, and without the lock
+		// nothing orders this write before its read of w.t in release.
+		w.mu.Lock()
 		w.t = i.sched.AfterFunc(after, func() { w.release(i.sched.Now()) })
+		w.mu.Unlock()
 	}
 	i.ledger.BeginConsequences(f.Face, f.ConnID, c)
 	return w
@@ -242,8 +247,8 @@ func (c Case) Rewrote(from, to envelope.Message) *transcript.Fault {
 
 // Crossed settles the attribution of the frame a case matched, once its bytes
 // are final: from is the frame as the subject (or the peer) wrote it, to is
-// what charpy delivered in its place, body is the part of to that crossed, and
-// whole says whether all of it did, delimiter included.
+// what charpy delivered in its place, and whole says whether all of to
+// crossed, delimiter included.
 //
 // Two corrections, both about what the attribution claims.
 //
@@ -254,16 +259,19 @@ func (c Case) Rewrote(from, to envelope.Message) *transcript.Fault {
 // tampered, so every layer drops the subject's real answer from its evidence.
 // The fault_applied event already records that the case acted, and when.
 //
-// A frame cut short names the id it hid. A cut is a rewrite whose replacement
-// is a prefix, and a prefix that stops mid-line or mid-event parses to no id,
-// so without this the answer it carried vanishes and the oracle reports the
-// subject as never having answered -- charpy's truncation, filed against
-// somebody else. It cannot be decided when the attribution is made, because the
-// cut is decided where the bytes are written.
+// A frame cut short names the id it carried, whatever the bytes that crossed
+// parse to. A frame that stops before its delimiter never arrived as a frame:
+// a stdio line cut before its newline is whole JSON that the recipient never
+// reads, and an SSE event cut before its blank line is never dispatched. Were
+// the id taken from what parses, a prefix that still carries it would count
+// as an answer that arrived, and one that does not would vanish -- and the
+// oracle would report the subject as never having answered, charpy's
+// truncation filed against somebody else. It cannot be decided when the
+// attribution is made, because the cut is decided where the bytes are written.
 //
 // Only the matched frame goes through here. A frame charpy synthesized is
 // charpy's whether or not it matches anything, and keeps its attribution.
-func Crossed(att *transcript.Fault, from, to envelope.Message, body []byte, whole bool) *transcript.Fault {
+func Crossed(att *transcript.Fault, from, to envelope.Message, whole bool) *transcript.Fault {
 	if att == nil {
 		return nil
 	}
@@ -271,10 +279,8 @@ func Crossed(att *transcript.Fault, from, to envelope.Message, body []byte, whol
 		return nil
 	}
 	out := *att
-	if !whole {
-		if crossed, _ := envelope.Parse(body); replaces(from, crossed) {
-			out.Replaced, out.ReplacedKind = from.ID, from.Kind
-		}
+	if !whole && from.ID.Present() {
+		out.Replaced, out.ReplacedKind = from.ID, from.Kind
 	}
 	return &out
 }

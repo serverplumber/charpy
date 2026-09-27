@@ -386,3 +386,48 @@ func TestCapabilityFlip(t *testing.T) {
 		})
 	}
 }
+
+// With the declaration in hand -- where charpy serves, it is its own -- the
+// violation lands on structuredContent: the frame is still valid JSON-RPC and
+// a valid CallToolResult, wrong only against the outputSchema.
+func TestSchemaViolationBreaksTheDeclaredOutput(t *testing.T) {
+	const declared = `{"type":"object","required":["sum"],"properties":{"sum":{"type":"number"}}}`
+	const answer = `{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{\"sum\":8}"}],"structuredContent":{"sum":8}}}`
+	ctx := fault.Context{RunSeed: runSeed, OutputSchema: []byte(declared)}
+
+	for how, check := range map[string]func(map[string]any) bool{
+		"wrong_type":       func(sc map[string]any) bool { _, isString := sc["sum"].(string); return isString },
+		"missing_required": func(sc map[string]any) bool { _, present := sc["sum"]; return !present },
+	} {
+		t.Run(how, func(t *testing.T) {
+			p, err := fault.Apply(caseOf("schema_violation", map[string]any{
+				"target": "declared_output_schema", "how": how,
+			}), parse(t, answer), ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				ID     int `json:"id"`
+				Result struct {
+					StructuredContent map[string]any `json:"structuredContent"`
+				} `json:"result"`
+			}
+			if err := json.Unmarshal(p.Deliver.Raw(), &got); err != nil {
+				t.Fatalf("the violation is not valid JSON: %v", err)
+			}
+			if got.ID != 2 {
+				t.Errorf("id = %d; the envelope must be untouched", got.ID)
+			}
+			if !check(got.Result.StructuredContent) {
+				t.Errorf("structuredContent = %v, not broken by %s", got.Result.StructuredContent, how)
+			}
+		})
+	}
+
+	// A result with nothing structured to break does not apply.
+	_, err := fault.Apply(caseOf("schema_violation", map[string]any{"target": "declared_output_schema"}),
+		parse(t, response), ctx)
+	if !errors.Is(err, fault.ErrNotApplicable) {
+		t.Errorf("a result without structuredContent planned as %v, want ErrNotApplicable", err)
+	}
+}

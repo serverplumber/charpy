@@ -31,6 +31,18 @@ const (
 	S2C Direction = "s2c"
 )
 
+// Opposite is the direction an answer to a frame travelling d goes back in,
+// and so the direction the request an answer travelling d answers came in.
+func (d Direction) Opposite() Direction {
+	switch d {
+	case C2S:
+		return S2C
+	case S2C:
+		return C2S
+	}
+	return d
+}
+
 // Transport is how the frame travelled.
 type Transport string
 

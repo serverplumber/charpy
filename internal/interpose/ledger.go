@@ -73,18 +73,29 @@ type countKey struct {
 }
 
 type connState struct {
+	// spaces holds one id space per direction a request can travel. JSON-RPC
+	// ids are the sender's: a client's request 1 and a server's request 1 are
+	// two exchanges, and once a server asks its client something -- sampling,
+	// a ping -- a ledger keyed on the id alone resolves the client's answer
+	// against the client's own request, names it with the wrong method, and
+	// the matcher misses the frame a case was written for.
+	spaces map[transcript.Direction]*idSpace
+	// lie is the case whose fault the next frames on this connection are
+	// downstream of, if any. See BeginConsequences.
+	lie   Case
+	lying bool
+}
+
+// idSpace is the bookkeeping for the requests one side of a connection sent.
+type idSpace struct {
 	inflight map[string]Exchange
 	resolved *cache.Cache[string, Exchange]
-	// last is the id most recently resolved on this connection, for
+	// last is the id most recently resolved in this space, for
 	// unsolicited_response's already_resolved source. A window would do, but
 	// the mechanism wants "an id resolved earlier" and the most recent one is
 	// the least stale answer to that.
 	last     envelope.ID
 	haveLast bool
-	// lie is the case whose fault the next frames on this connection are
-	// downstream of, if any. See BeginConsequences.
-	lie   Case
-	lying bool
 }
 
 // Exchange is what the ledger remembers about a request.
@@ -97,7 +108,11 @@ type Exchange struct {
 	IntentID envelope.ID
 	WireID   envelope.ID
 	Method   string
-	At       clock.Mono
+	// Tool is the tool a tools/call named. An answer carries neither method
+	// nor tool, and a fault against a tool's declared output has to know
+	// whose declaration it is breaking.
+	Tool string
+	At   clock.Mono
 }
 
 // LedgerOption configures a Ledger.
@@ -155,7 +170,7 @@ func (l *Ledger) Now() clock.Mono { return l.sched.Now() }
 // the string "7" are two exchanges and not one -- a duplicate_id case with
 // vary_type set puts both on the wire, and a ledger that merged them would
 // wedge on charpy's own fault.
-func (l *Ledger) Originate(face transcript.Face, conn string, e Exchange) {
+func (l *Ledger) Originate(face transcript.Face, conn string, origin transcript.Direction, e Exchange) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -166,7 +181,7 @@ func (l *Ledger) Originate(face transcript.Face, conn string, e Exchange) {
 	if !e.IntentID.Present() {
 		e.IntentID = e.WireID
 	}
-	l.connLocked(face, conn).inflight[e.WireID.Key()] = e
+	l.spaceLocked(face, conn, origin).inflight[e.WireID.Key()] = e
 }
 
 // Resolve marks a request answered and moves it into the resolved window,
@@ -175,20 +190,20 @@ func (l *Ledger) Originate(face transcript.Face, conn string, e Exchange) {
 // Resolving an id that is already resolved is not an error: a duplicate_id
 // case answers the same id twice on purpose, and the second answer must still
 // resolve to a method rather than falling off the end of the bookkeeping.
-func (l *Ledger) Resolve(face transcript.Face, conn string, wire envelope.ID) (Exchange, bool) {
+func (l *Ledger) Resolve(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID) (Exchange, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	cs := l.connLocked(face, conn)
+	sp := l.spaceLocked(face, conn, origin)
 	key := wire.Key()
 
-	if e, ok := cs.inflight[key]; ok {
-		delete(cs.inflight, key)
-		cs.resolved.Put(key, e)
-		cs.last, cs.haveLast = wire, true
+	if e, ok := sp.inflight[key]; ok {
+		delete(sp.inflight, key)
+		sp.resolved.Put(key, e)
+		sp.last, sp.haveLast = wire, true
 		return e, true
 	}
-	return cs.resolved.Get(key)
+	return sp.resolved.Get(key)
 }
 
 // MethodFor reports the method a response's id resolves to, without resolving
@@ -198,17 +213,34 @@ func (l *Ledger) Resolve(face transcript.Face, conn string, wire envelope.ID) (E
 // It consults in-flight exchanges first and the resolved window second, so a
 // late duplicate for an already-answered id still names its method -- which is
 // exactly the frame unsolicited_response and duplicate_id produce.
-func (l *Ledger) MethodFor(face transcript.Face, conn string, wire envelope.ID) (string, bool) {
+func (l *Ledger) MethodFor(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID) (string, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	cs := l.connLocked(face, conn)
+	sp := l.spaceLocked(face, conn, origin)
 	key := wire.Key()
-	if e, ok := cs.inflight[key]; ok {
+	if e, ok := sp.inflight[key]; ok {
 		return e.Method, true
 	}
-	if e, ok := cs.resolved.Get(key); ok {
+	if e, ok := sp.resolved.Get(key); ok {
 		return e.Method, true
+	}
+	return "", false
+}
+
+// ToolFor reports the tool a tools/call answer's id resolves to, the way
+// MethodFor reports its method.
+func (l *Ledger) ToolFor(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	sp := l.spaceLocked(face, conn, origin)
+	key := wire.Key()
+	if e, ok := sp.inflight[key]; ok {
+		return e.Tool, e.Tool != ""
+	}
+	if e, ok := sp.resolved.Get(key); ok {
+		return e.Tool, e.Tool != ""
 	}
 	return "", false
 }
@@ -218,18 +250,18 @@ func (l *Ledger) MethodFor(face transcript.Face, conn string, wire envelope.ID) 
 // already_resolved). Absent when nothing has resolved yet, which makes that
 // case not apply rather than wrong. Callers read it before resolving the
 // current frame, so it names a prior id and not the one in hand.
-func (l *Ledger) LatestResolved(face transcript.Face, conn string) (envelope.ID, bool) {
+func (l *Ledger) LatestResolved(face transcript.Face, conn string, origin transcript.Direction) (envelope.ID, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	cs := l.connLocked(face, conn)
-	return cs.last, cs.haveLast
+	sp := l.spaceLocked(face, conn, origin)
+	return sp.last, sp.haveLast
 }
 
 // InFlight reports how many requests are outstanding on a connection.
-func (l *Ledger) InFlight(face transcript.Face, conn string) int {
+func (l *Ledger) InFlight(face transcript.Face, conn string, origin transcript.Direction) int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.connLocked(face, conn).inflight)
+	return len(l.spaceLocked(face, conn, origin).inflight)
 }
 
 // CloseConn drops a connection's state. Both of its tables are bounded by the
@@ -253,18 +285,18 @@ func (l *Ledger) CloseConn(face transcript.Face, conn string) {
 // A rewrite of a frame the ledger never saw originated still registers: a
 // relayed frame has no Originate call behind it, and its inverse matters just
 // as much.
-func (l *Ledger) RegisterRewrite(face transcript.Face, conn string, intent, wire envelope.ID) {
+func (l *Ledger) RegisterRewrite(face transcript.Face, conn string, origin transcript.Direction, intent, wire envelope.ID) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	cs := l.connLocked(face, conn)
-	e, ok := cs.inflight[intent.Key()]
+	sp := l.spaceLocked(face, conn, origin)
+	e, ok := sp.inflight[intent.Key()]
 	if !ok {
 		e = Exchange{At: l.sched.Now()}
 	}
-	delete(cs.inflight, intent.Key())
+	delete(sp.inflight, intent.Key())
 	e.IntentID, e.WireID = intent, wire
-	cs.inflight[wire.Key()] = e
+	sp.inflight[wire.Key()] = e
 }
 
 // Untranslate maps an id the subject answered back to the id the origination
@@ -274,14 +306,14 @@ func (l *Ledger) RegisterRewrite(face transcript.Face, conn string, intent, wire
 // the scenario dies of charpy's fault rather than the subject's. An id that
 // was never rewritten translates to itself, so a caller can apply this
 // unconditionally.
-func (l *Ledger) Untranslate(face transcript.Face, conn string, wire envelope.ID) (envelope.ID, bool) {
+func (l *Ledger) Untranslate(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID) (envelope.ID, bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	cs := l.connLocked(face, conn)
-	e, ok := cs.inflight[wire.Key()]
+	sp := l.spaceLocked(face, conn, origin)
+	e, ok := sp.inflight[wire.Key()]
 	if !ok {
-		e, ok = cs.resolved.Get(wire.Key())
+		e, ok = sp.resolved.Get(wire.Key())
 	}
 	if !ok || !e.IntentID.Present() {
 		return wire, false
@@ -362,11 +394,24 @@ func (l *Ledger) connLocked(face transcript.Face, conn string) *connState {
 	k := connKey{face: face, conn: conn}
 	cs, ok := l.conns[k]
 	if !ok {
-		cs = &connState{
-			inflight: make(map[string]Exchange),
-			resolved: cache.New(FIFO[string, Exchange]().WithLimit(int64(l.window))),
-		}
+		cs = &connState{spaces: map[transcript.Direction]*idSpace{}}
 		l.conns[k] = cs
 	}
 	return cs
+}
+
+// spaceLocked is the id space of the requests that travelled origin on a
+// connection. An answer is looked up in the space opposite to its own
+// direction: it answers a request that came the other way.
+func (l *Ledger) spaceLocked(face transcript.Face, conn string, origin transcript.Direction) *idSpace {
+	cs := l.connLocked(face, conn)
+	sp, ok := cs.spaces[origin]
+	if !ok {
+		sp = &idSpace{
+			inflight: make(map[string]Exchange),
+			resolved: cache.New(FIFO[string, Exchange]().WithLimit(int64(l.window))),
+		}
+		cs.spaces[origin] = sp
+	}
+	return sp
 }

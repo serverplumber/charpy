@@ -18,13 +18,18 @@ import (
 	"github.com/serverplumber/charpy/internal/oracle/reaction"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
+	"github.com/serverplumber/charpy/internal/scenario"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
 // script runs one case against a conforming SDK subject with charpy's own peer
 // driving it, and returns everything the run produced.
-func script(t *testing.T, c interpose.Case, era revision.Revision) run {
+func script(t *testing.T, c interpose.Case, era revision.Revision, stim ...scenario.Options) run {
 	t.Helper()
+	var stimulus scenario.Options
+	if len(stim) > 0 {
+		stimulus = stim[0]
+	}
 
 	var transcriptBuf, subjErr strings.Builder
 	sched := clock.RealSched()
@@ -44,9 +49,10 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 	}
 
 	sc, err := stdio.NewScript(stdio.ScriptOptions{
-		Case:    c,
-		Era:     era,
-		Timeout: 5 * time.Second,
+		Case:     c,
+		Era:      era,
+		Stimulus: stimulus,
+		Timeout:  5 * time.Second,
 		Options: stdio.Options{
 			Command:    subjectCommand(),
 			Env:        append(os.Environ(), sdkSubjectEnv+"=1"),
@@ -404,4 +410,37 @@ func TestADestroyedRequestIsAnsweredByCharpyAndTheScriptGoesOn(t *testing.T) {
 		}
 		t.Logf("reaction: %s -- %s", f.Summary, f.Detail)
 	}
+}
+
+// A server with a request of its own outstanding -- a sampling request, sent to
+// its client mid-call -- whose answer the client holds back and then fails.
+// The shipped case, run as written: the matcher lands on the peer's answer, the
+// hold keeps it from the server, and when it is withdrawn the server receives
+// an error in its place. What the server does then is the reaction: here the
+// fixture answers its caller and goes on serving.
+func TestAServersOwnRequestIsHeldAndFailed(t *testing.T) {
+	r := script(t, shippedCase(t, "lifecycle/server-request-unanswered"), revision.V20251125,
+		scenario.Options{Tool: "ask_model"})
+	tr := drivertest.Read(t, r.raw)
+
+	var sampled, held bool
+	for _, f := range tr.Frames() {
+		if f.Direction == transcript.S2C && f.MethodName() == "sampling/createMessage" && f.Kind == envelope.KindRequest {
+			sampled = true
+		}
+		// What the server finally receives in place of its answer.
+		if f.Direction == transcript.C2S && f.Kind == envelope.KindError && f.Tampered() {
+			held = true
+		}
+	}
+	if !sampled {
+		t.Fatal("the server never asked its client anything")
+	}
+	if len(tr.Events(transcript.FaultWithdrawn)) != 1 {
+		t.Errorf("fault_withdrawn %d times, want once", len(tr.Events(transcript.FaultWithdrawn)))
+	}
+	if !held {
+		t.Error("no error reached the server in place of the held answer")
+	}
+	drivertest.ReactionAnswered(t, tr)
 }
