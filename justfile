@@ -47,6 +47,7 @@ test:
 race:
     {{go}} test -race {{pkg}}
 
+# Run go vet
 vet:
     {{go}} vet {{pkg}}
 
@@ -74,6 +75,7 @@ _go-files:
 
 # The determinism guarantee, as a gate rather than an aspiration: replaying one
 # transcript twice must produce byte-identical verdicts (decisions.md ADR-001).
+# Replay one transcript twice and require byte-identical verdicts
 determinism:
     {{go}} test ./cmd/charpy -run TestReplayIsByteIdentical -v
 
@@ -124,5 +126,6 @@ vendor-specs:
     echo "Now update spec/VENDORED.md (commit, date, file count) and re-check"
     echo "the claims it records -- line numbers move at every pull."
 
+# Remove the built binary and charpy's default output
 clean:
     rm -rf charpy dist charpy-out

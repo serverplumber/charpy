@@ -164,11 +164,9 @@ func TestTheStatelessHandshakeSettlesTheHeader(t *testing.T) {
 // originated, recorded against the case that asked for it and delivered to a
 // real subject.
 //
-// The fault is aimed at a notification because the shim injects toward the
-// subject only, and a notification expects no answer -- so the corruption
-// lands without the script waiting on a reply that a broken frame will never
-// produce. Which direction the shipped catalogue's cases actually want is a
-// separate and unresolved question; see the note in notes/status.md.
+// The fault is aimed at a notification because a notification expects no
+// answer, so the corruption lands without the script waiting on a reply that a
+// broken frame will never produce.
 func TestAFaultLandsOnOwnedStimulus(t *testing.T) {
 	r := script(t, interpose.Case{
 		ID:       "frame/truncate-notification",

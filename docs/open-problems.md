@@ -144,11 +144,11 @@ one; a Streamable HTTP POST response is a one-shot the server closes when it is 
 The asymmetry is the transport's, not charpy's -- the same reason `interposer.md` §5.1 lists what
 survives relay differently per transport.
 
-**Why it is not closed for v0.** Nothing exercises it. Every `hang` case in the catalogue is
-`family = gateway`, `face = "upstream"`, and the one-faced proxy does not run gateway cases
-(`stream/truncate-*` are the only HTTP cases, and they cut rather than hold). So the gap is real
-but currently unreachable, and closing it speculatively would be inventing a delivery channel for
-a case that cannot yet arrive.
+**Why it is not closed for v0.** Nothing exercises it. The one `hang` case that runs today,
+`lifecycle/server-request-unanswered`, is stdio-only, and the other is a gateway case, which
+needs the gateway driver. The HTTP cases the proxy runs cut or corrupt rather than hold. So the gap
+is real but currently unreachable, and closing it speculatively would be inventing a delivery
+channel for a case that cannot yet arrive.
 
 **What closing it would take.** A held-then-deliver over HTTP has to keep the response stream open
 past the point the subject stopped writing -- charpy holds the SSE stream itself, delivers the

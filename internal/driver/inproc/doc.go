@@ -1,5 +1,6 @@
-// Package inproc wraps the official Go SDK's Transport interface, roughly
-// fifty lines on top of the shared interposer.
+// Package inproc is to wrap the official Go SDK's Transport interface, roughly
+// fifty lines on top of the shared interposer. Not built: this package holds
+// only its design.
 //
 // It exists for what the wire cannot see: goroutine leaks per failed upstream,
 // wedged mutexes, unbounded channel growth, session maps that never evict, and

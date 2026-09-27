@@ -77,10 +77,12 @@ Three practical notes:
 - **Malformed frames are excluded.** A frame charpy deliberately corrupted cannot be held against the
   subject. Only frames the subject originated are validated.
 - **Validation is offline**, so it costs nothing in the frame path.
-- **`declared_output_schema` extends this layer.** When a server publishes `outputSchema` in
-  `tools/list` and then returns `structuredContent` violating it, the rejecting artifact is the
-  subject's own declaration. That earns a MUST by the same logic, and is the most valuable MUST
-  charpy can issue because it needs no spec authority at all.
+- **`declared_output_schema` is to extend this layer -- designed, not built.** When a server
+  publishes `outputSchema` in `tools/list` and then returns `structuredContent` violating it, the
+  rejecting artifact is the subject's own declaration. That earns a MUST by the same logic, and is
+  the most valuable MUST charpy can issue because it needs no spec authority at all. Today layer 1
+  validates each frame against the JSON-RPC message schema only; nothing yet pairs a result with
+  its tool's declaration.
 
 ---
 
@@ -90,8 +92,8 @@ Computable from the middle with no access to the implementation, therefore langu
 free. Each is a small function over the transcript.
 
 Below they are derived per revision, split where one statement would have covered two different
-mechanisms, and extended where 2026-07-28 created new seams. v0 ships **I1–I7**; **I8–I13** are
-specified now and implemented in the second wave.
+mechanisms, and extended where 2026-07-28 created new seams. **I1–I3 are built.** I4–I7 are the
+rest of v0's set, and I8–I13 are specified now for the second wave; none of those is built yet.
 
 ### Universal — every revision, every subject
 

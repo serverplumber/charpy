@@ -138,7 +138,7 @@ the identity-bearing fields are:
 [[case]]
 id           = "stream/truncate-mid-event"
 applies_to   = ">=2025-03-26"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "spec:2025-11-25/basic/transports#streamable-http"
 summary      = "SSE stream cut in the middle of an event's data field."

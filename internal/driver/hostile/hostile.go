@@ -217,7 +217,7 @@ func declaredOutput(tool string) json.RawMessage {
 
 // applyFault carries out a plan toward the client. The verb dance is the stdio
 // shim's -- delivery here is stdio too, since the client is on pipes -- kept as
-// a sibling for now (see notes): rewrite, synthesize, and the stream actions.
+// a sibling rather than shared: rewrite, synthesize, and the stream actions.
 func (h *Hostile) applyFault(ctx context.Context, c interpose.Case, m envelope.Message, dir transcript.Direction, to *wire.Stdio, prior envelope.ID) {
 	h.x.FaultEvent(transcript.FaultScheduled, c, nil)
 

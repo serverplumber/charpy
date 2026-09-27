@@ -25,13 +25,95 @@ a case deliberately left open** — never to work out the conversation from scra
 fingerprint ladder ([`revisions.md`](docs/design/revisions.md) §3) is the fallback for
 `revision = "auto"`, not the normal shape of a run.
 
-charpy is a hostile MCP peer. It sits in front of, behind, or on both sides of
-an implementation under test, injects faults into an otherwise valid protocol
-exchange, records a correlated transcript of everything that crosses the wire,
-and reports what the implementation did.
+charpy is a hostile MCP peer. It sits in front of or behind an implementation under
+test, injects faults into an otherwise valid protocol exchange, records a transcript of
+everything that crosses the wire, and reports what the implementation did.
 
 Named for the [Charpy impact test](https://en.wikipedia.org/wiki/Charpy_impact_test):
 it measures toughness under sudden load, not conformance to dimensions.
+
+## Status
+
+**Early, and working.** charpy tests MCP servers and clients over stdio and Streamable
+HTTP, and judges what they do when a fault reaches them.
+
+- **Five ways to run:** drive a server over stdio; proxy a running HTTP server; relay
+  between a client and a server it spawned; and serve a client, hostile, over stdio or
+  HTTP.
+- **17 cases** over eight fault mechanisms. 14 run today; the other three wait on the
+  gateway driver or the cross-SDK differential.
+- **An offline oracle:** schema validation (the only source of a MUST), invariants over
+  the transcript, and the subject's reaction to each fault — did it answer the next
+  question, stop answering, exit, or recover on a fresh session.
+- **Reports** as text, JSONL and JUnit. Replaying a transcript twice gives byte-identical
+  verdicts, and CI checks that it does.
+
+**Not built yet:** the gateway driver, which puts charpy on both sides of a subject and
+correlates the two; the cross-SDK differential; soak mode; the HTML report.
+[`introduction.md`](docs/introduction.md) §9 has the full list, and
+[`open-problems.md`](docs/open-problems.md) the known gaps.
+
+## Quick start
+
+You need Go 1.26 and [`just`](https://just.systems).
+
+```
+just demo
+```
+
+That builds charpy and the Go SDK's conformance `everything-server`, runs one case
+against it over stdio, and prints the verdict. `just --list` shows a demo for every
+other mode.
+
+Against your own server:
+
+```
+charpy run --case '*' --revision 2025-11-25 --tool <harmless-tool> -- ./your-server
+charpy run --subject-url http://localhost:9000/mcp --case '*' --revision 2025-11-25
+charpy replay charpy-out/<run-id>.jsonl
+charpy replay --format junit charpy-out/<run-id>.jsonl > charpy.xml
+```
+
+Each case is its own run and writes its own transcript to `charpy-out/`. `--tool`
+names the tool the script calls; without it charpy calls the first one the server
+lists, which is fine for a fixture and not for a server whose first tool does
+something. `charpy cases --revision 2025-11-25` prints the catalogue.
+
+Against your own client, have it connect to charpy, which serves it hostile:
+
+```
+charpy run --hostile-http 127.0.0.1:8080 --case '*' --revision 2025-11-25
+```
+
+or put `charpy run --hostile --case '*' --revision 2025-11-25` in the client's
+server configuration, for stdio.
+
+## What it has found
+
+**A malformed stdio frame kills servers built on the official Go SDK.** One line that
+is not valid JSON makes the server exit instead of answering with a `-32700` parse
+error. Requests it had already received can lose their answers too. The same server
+over Streamable HTTP rejects the same bytes with `400` and keeps serving. charpy saw
+this in the SDK's own conformance `everything-server` and in
+[`github-mcp-server`](https://github.com/github/github-mcp-server). It was already
+reported as
+[go-sdk#1209](https://github.com/modelcontextprotocol/go-sdk/issues/1209);
+[what charpy measured](https://github.com/modelcontextprotocol/go-sdk/issues/1209#issuecomment-5856813005),
+including what the proposed fix leaves open, is on that issue.
+
+**The Go SDK's client accepts structured results that break the tool's declared
+`outputSchema`.** The specification says clients SHOULD validate them. That is a
+recommendation, not a requirement, and is reported here as an observation.
+
+## A fault is put to whoever receives it
+
+A damaged frame is a question put to its recipient, and the answer is in what the
+recipient does next — never in the damaged frame, which is charpy's. So every case
+states its direction, and the loader refuses one whose fault would not reach the
+subject it names: a server receives faults on the requests it is sent, a client on
+the answers. A case whose answer nothing can observe — whether a client silently
+takes `"7"` for `7` leaves nothing on the wire — says so, and is not armed where it
+could only fire unseen. See [ADR-013](docs/design/decisions.md).
 
 **v0 finds bugs. v1 finds leaks.** v0 drives one client through a catalogue of hostile
 frames and asks whether the subject handles each correctly. v1 adds [soak
@@ -54,8 +136,9 @@ a middleman pleasant to write — this is Go's home ground.
 A gateway is simultaneously a client and a server, and its failures live in the
 seam: merged manifests, notification fan-out across upstreams, session identity
 mapping, the credential boundary. None of these are observable from one side,
-which is why charpy tags every frame with the face it crossed and correlates
-the two.
+which is why every line of charpy's transcript records the face it crossed. The
+gateway driver, which runs charpy on both sides of one subject and correlates the
+two, is the next thing to build.
 
 As of the 2026-07-28 revision this is no longer only an engineering argument.
 The specification now carries requirements aimed directly at intermediaries —
@@ -63,7 +146,8 @@ unrecognised `Mcp-Param-*` headers **MUST** be forwarded, and an intermediary
 enforcing policy on mirrored headers **SHOULD** reject a request whose
 `MCP-Protocol-Version` does not require header–body validation rather than
 trusting it. A header/body mismatch is a spec'd error with its own code,
-`-32020`. Nothing currently tests any of it.
+`-32020`. Nothing currently tests any of it, charpy included until the gateway
+driver lands.
 
 ## Verdicts
 
@@ -71,31 +155,35 @@ Two buckets, nothing between.
 
 - **MUST** — schema-mechanical only. A generated normative artifact rejected
   the frame, and the report cites the `$ref` that did it.
-- **OBSERVED** — everything else, with a cross-SDK divergence table attached
-  where one exists.
+- **OBSERVED** — everything else: what the subject did, stated as a fact.
 
 charpy never issues a behavioural MUST. "You violate the spec" from a third
 party is an opinion that requires a clause inventory rotting at every revision.
 "Your gateway leaks a goroutine per failed upstream and stops reconnecting" is
 a fact that needs no authority behind it.
 
+A check that could not be settled says so instead of passing: **SKIPPED** (it did
+not apply), **INCONCLUSIVE** (the transcript cannot decide it), **UNTRIGGERED** (the
+fault never fired). All three render as skips in JUnit, and none as a pass.
+
 ## The transcript is the product
 
-Every run emits JSONL: one line per frame, face-tagged, correlated, with a
-versioned schema. The oracle, the report and the divergence table are all
-consumers of it, and the oracle runs **offline** over a finished transcript —
-so invariants written next month re-run against transcripts captured today, and
-verdicts are exactly reproducible even though runs against a live subject are
-not.
+Every run emits JSONL: one line per frame, face-tagged, with a versioned schema.
+The oracle and the reports are consumers of it, and the oracle runs **offline**
+over a finished transcript — so invariants written next month re-run against
+transcripts captured today, and verdicts are exactly reproducible even though runs
+against a live subject are not.
 
 There is no database. JSONL *is* the database, and every invariant is a query
 someone else can write with no code from charpy:
 
 ```sql
--- every request id that resolved more than once
-select id, count(*) from read_json('run.jsonl', union_by_name = true)
+-- every exchange answered more than once: an id is only an exchange within its
+-- connection and within the direction its request travelled
+select conn_id, direction, id_type, id, count(*)
+  from read_json('run.jsonl', union_by_name = true)
  where type = 'frame' and kind in ('response', 'error')
- group by id having count(*) > 1;
+ group by conn_id, direction, id_type, id having count(*) > 1;
 
 -- frames that carried an injected fault, in order
 select seq, face, direction, method, fault.kind, fault.citation
@@ -133,6 +221,7 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 
 | | |
 |---|---|
+| [`introduction.md`](docs/introduction.md) | **Start here.** How a run becomes a verdict, and a map of the rest |
 | [`case-identity.md`](docs/design/case-identity.md) | How cases are named and cited across five spec revisions |
 | [`transcript.md`](docs/design/transcript.md) | The JSONL schema, face tagging, and the three correlation regimes |
 | [`faults-and-cases.md`](docs/design/faults-and-cases.md) | Mechanisms, parameters, and the stateless-era gateway family |
@@ -148,13 +237,15 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 
 ```
 just           # list recipes
-just check     # gofmt, vet, and test -race
+just check     # gofmt, vet, go test -race, and the determinism gate
 just build
 just repl      # open a transcript in duckdb, view `t` bound to it
 ```
 
-A Nix shell (`shell.nix`) provides Go, plus node and python3 for the cross-SDK
-reference peers and duckdb for transcript queries.
+Go 1.26 and `just` are all a build needs. `just repl` needs
+[DuckDB](https://duckdb.org); the `vendor-*` recipes need `curl`. With Nix,
+`nix-shell` (or direnv, through `.envrc`) provides Go, DuckDB, `curl` and the
+Go tools from `shell.nix`.
 
 The reference peer — the always-correct side of every run charpy originates — is
 `github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod`. It is a pre-release

@@ -27,7 +27,7 @@ schema_version = 1
 [[case]]
 id           = "stream/truncate-event-boundary"
 applies_to   = ">=2026-07-28"
-subject      = ["server", "gateway"]
+subject      = ["client", "gateway"]
 transport    = ["http"]
 verdict      = "OBSERVED"
 derives_from = "spec:2026-07-28/basic/transports/streamable-http#receiving-messages"
@@ -36,7 +36,7 @@ status       = "active"
 
   [case.match]
   method     = "tools/call"
-  face       = "downstream"
+  face       = "upstream"
   direction  = "s2c"
   occurrence = 2
 

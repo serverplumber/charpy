@@ -14,7 +14,7 @@
 // identity. Single-connection drivers make one Conn and keep it; the HTTP
 // drivers make a Conn per client session, so a client that reconnects is two
 // connections and not one, which the ledger must see to count and correlate
-// correctly. See notes/status.md.
+// correctly.
 package exchange
 
 import (

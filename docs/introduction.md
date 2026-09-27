@@ -123,6 +123,10 @@ five jobs (`design/interposer.md` §3):
 - tag the reference peer's frames that are consequences of a lie
 - emit the `link` object correlation is computed from
 
+It keeps one id space per direction a request can travel, because JSON-RPC ids are the sender's:
+a client's request 1 and its server's request 1 are two exchanges, and an answer is resolved
+against the requests that came the other way to it.
+
 **Wire** (`internal/wire`). Raw bytes on and off the transport, with no opinions on conformance:
 newline-delimited stdio, and SSE on `net/http` extended through `ResponseController` rather than
 replaced. It can stop mid-frame, which no SDK transport can. It has seven cut points, and it
@@ -319,6 +323,7 @@ report formats, the determinism gate, and `cases` and `policy validate`.
 
 - the gateway driver and two-face correlation (`traced`, `inferred`)
 - invariants I4–I13
+- layer 1's check of a result's `structuredContent` against its tool's declared `outputSchema`
 - the cross-SDK differential
 - the HTML report and divergence table
 - the control plane (`design/policy-format.md` §5)

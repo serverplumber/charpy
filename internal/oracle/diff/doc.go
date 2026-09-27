@@ -1,4 +1,5 @@
-// Package diff is oracle layer 3: the cross-SDK differential.
+// Package diff is oracle layer 3: the cross-SDK differential. Not built: this
+// package holds only its design.
 //
 // The same scripted scenario runs against reference peers built on the Go,
 // TypeScript and Python SDKs, each a subprocess over stdio, same wire to all
