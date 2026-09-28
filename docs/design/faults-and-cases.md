@@ -134,9 +134,9 @@ is supposed to validate what it receives. It is OBSERVED at most, because what i
 recipient did about the frame, not the frame (`decisions.md` ADR-013). This paragraph once called it
 MUST-eligible "because the rejecting artifact is the subject's own declaration", which conflated two
 things. *Detecting* a server that breaks its own declared schema needs no fault at all -- it is
-layer 1 over any run, where the subject's own untouched frame is what the schema rejects
-(`oracle.md` §3). *Injecting* a break makes the violating frame charpy's, and layer 1 rightly
-refuses to hold charpy's frames against anyone.
+layer 1's job over any run, where the subject's own untouched frame is what the schema rejects
+(`oracle.md` §3, designed and not built). *Injecting* a break makes the violating frame charpy's,
+and layer 1 rightly refuses to hold charpy's frames against anyone.
 
 Built where charpy serves -- the hostile drivers, over stdio and HTTP -- because there the declaration
 is charpy's own: the reference peer lists its tools' `outputSchema` as a client sees them, and the
