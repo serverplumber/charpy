@@ -105,7 +105,7 @@ func caseSchema() map[string]any {
 			"summary": map[string]any{
 				"type":        "string",
 				"minLength":   1,
-				"description": "One sentence; appears in the report and in JUnit.",
+				"description": "One sentence; appears in the report.",
 			},
 			"status": map[string]any{
 				"enum":        []string{"active", "withdrawn"},

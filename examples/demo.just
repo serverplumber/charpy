@@ -152,10 +152,10 @@ demo-github: demo-build demo-github-build
 demo-replay:
     ./charpy replay "$(ls -t {{ex_out}}/*.jsonl | head -1)"
 
-#   charpy replay --format junit <transcript> > charpy.xml
-[doc('The same verdict as JUnit XML, which is what puts charpy in CI')]
-demo-junit:
-    ./charpy replay --format junit "$(ls -t {{ex_out}}/*.jsonl | head -1)"
+#   charpy replay --format jsonl <transcript> > verdicts.jsonl
+[doc('The same verdicts as JSONL, one per line, to query like the transcript')]
+demo-jsonl:
+    ./charpy replay --format jsonl "$(ls -t {{ex_out}}/*.jsonl | head -1)"
 
 # No recipe can run these: the client under test is what starts charpy, so they
 # belong in its server configuration rather than in a justfile.

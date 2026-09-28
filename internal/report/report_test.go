@@ -3,7 +3,6 @@ package report_test
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"strings"
 	"testing"
 
@@ -31,100 +30,30 @@ func sample() oracle.Report {
 
 // The property oracle.md insists on hardest: a suite that reports skips as
 // passes acquires false confidence, which is how test suites become worthless.
-// All three non-verdicts must be visibly not-passes, and must stay
-// distinguishable from each other -- they mean different things and a reader
-// acts differently on each.
-func TestNonVerdictsAreNeverPasses(t *testing.T) {
+// Every finding keeps its own verdict -- the three non-verdicts mean different
+// things and a reader acts differently on each -- and a non-verdict keeps its
+// reason, without which it reads as a pass to whoever gets the report.
+func TestEveryVerdictSurvivesDistinctly(t *testing.T) {
 	var buf bytes.Buffer
-	if err := report.JUnit(&buf, sample()); err != nil {
+	if err := report.JSONL(&buf, sample()); err != nil {
 		t.Fatal(err)
 	}
 
-	var suite struct {
-		Tests    int `xml:"tests,attr"`
-		Failures int `xml:"failures,attr"`
-		Skipped  int `xml:"skipped,attr"`
-		Cases    []struct {
-			Name    string `xml:"name,attr"`
-			Failure *struct {
-				Type string `xml:"type,attr"`
-			} `xml:"failure"`
-			Skipped *struct {
-				Message string `xml:"message,attr"`
-			} `xml:"skipped"`
-		} `xml:"testcase"`
-	}
-	if err := xml.Unmarshal(buf.Bytes(), &suite); err != nil {
-		t.Fatalf("not valid JUnit XML: %v\n%s", err, buf.String())
-	}
-
-	if suite.Tests != 5 || suite.Failures != 2 || suite.Skipped != 3 {
-		t.Errorf("tests=%d failures=%d skipped=%d, want 5/2/3", suite.Tests, suite.Failures, suite.Skipped)
-	}
-
-	// Not one of the five may come out as a bare pass.
-	for _, c := range suite.Cases {
-		if c.Failure == nil && c.Skipped == nil {
-			t.Errorf("%q rendered as a pass", c.Name)
+	got := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		var f struct{ Verdict, Reason string }
+		if err := json.Unmarshal([]byte(line), &f); err != nil {
+			t.Fatal(err)
+		}
+		got[f.Verdict] = true
+		if f.Reason != "" {
+			got["reason:"+f.Reason] = true
 		}
 	}
-
-	// The three skips must still say which they were: SKIPPED means the check
-	// did not apply, INCONCLUSIVE that it could not be settled, UNTRIGGERED
-	// that the fault never fired. CI shows all three the same way, so the
-	// message is the only place the difference survives.
-	want := map[string]bool{"SKIPPED": false, "INCONCLUSIVE": false, "UNTRIGGERED": false}
-	for _, c := range suite.Cases {
-		if c.Skipped == nil {
-			continue
-		}
-		for verdict := range want {
-			if strings.HasPrefix(c.Skipped.Message, verdict+":") {
-				want[verdict] = true
-			}
-		}
-	}
-	for verdict, found := range want {
-		if !found {
-			t.Errorf("%s is indistinguishable from the other non-verdicts in JUnit", verdict)
-		}
-	}
-}
-
-// A non-verdict without a reason reads as a pass to whoever gets the report.
-func TestNonVerdictsCarryTheirReason(t *testing.T) {
-	var buf bytes.Buffer
-	if err := report.JUnit(&buf, sample()); err != nil {
-		t.Fatal(err)
-	}
-	for _, reason := range []string{"not-applicable-to-revision", "subject-exited-first"} {
-		if !strings.Contains(buf.String(), reason) {
-			t.Errorf("the report does not carry the reason %q", reason)
-		}
-	}
-}
-
-// CI keys history off classname and name, which is why a citation's seed never
-// appears in either: a per-run seed there makes every run look like a brand
-// new test and destroys flake history.
-func TestJUnitNamesCarryNoSeed(t *testing.T) {
-	var buf bytes.Buffer
-	if err := report.JUnit(&buf, sample()); err != nil {
-		t.Fatal(err)
-	}
-
-	var suite struct {
-		Cases []struct {
-			ClassName string `xml:"classname,attr"`
-			Name      string `xml:"name,attr"`
-		} `xml:"testcase"`
-	}
-	if err := xml.Unmarshal(buf.Bytes(), &suite); err != nil {
-		t.Fatal(err)
-	}
-	for _, c := range suite.Cases {
-		if strings.Contains(c.Name, "seed=") || strings.Contains(c.ClassName, "seed=") {
-			t.Errorf("a seed reached CI's history key: %s / %s", c.ClassName, c.Name)
+	for _, want := range []string{"MUST", "OBSERVED", "SKIPPED", "INCONCLUSIVE", "UNTRIGGERED",
+		"reason:not-applicable-to-revision", "reason:subject-exited-first"} {
+		if !got[want] {
+			t.Errorf("the report lost %s", want)
 		}
 	}
 }

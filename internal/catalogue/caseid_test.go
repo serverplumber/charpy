@@ -103,21 +103,6 @@ func TestParseCitation(t *testing.T) {
 	}
 }
 
-// The seed is deliberately absent from JUnit names: CI keys test history off
-// classname+name, so a per-run seed would make every run look like a new test.
-func TestJUnitNamingOmitsSeed(t *testing.T) {
-	c, err := ParseCitation("stream/truncate-mid-event@2025-11-25#seed=8f2c1a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := c.ID.JUnitClass(), "charpy.stream"; got != want {
-		t.Errorf("JUnitClass() = %q, want %q", got, want)
-	}
-	if got, want := c.JUnitName(), "truncate-mid-event@2025-11-25"; got != want {
-		t.Errorf("JUnitName() = %q, want %q", got, want)
-	}
-}
-
 func TestEveryFamilyParses(t *testing.T) {
 	for _, f := range families {
 		t.Run(string(f), func(t *testing.T) {

@@ -47,9 +47,19 @@ Plus three non-verdicts that must not be confused with passing:
 | `UNTRIGGERED` | The case applied and the run completed, but no frame ever matched, so the fault was never injected. The normal outcome for a relayed-stimulus run (`interposer.md` §5.1) whose traffic never went where the matcher points; under owned stimulus it usually indicates a scenario bug. |
 
 A suite that reports skips as passes acquires false confidence, which is the failure mode that makes
-test suites worthless over time. The report renders all five distinctly and the JUnit output maps
-`SKIPPED`, `INCONCLUSIVE` and `UNTRIGGERED` to `<skipped/>` with distinguishing messages —
-never to a pass.
+test suites worthless over time. The text and JSONL reports carry all five distinctly, each
+non-verdict with its reason — never as a pass.
+
+Only `MUST` fails the build: replay exits `1` on a `MUST` and on nothing else. `OBSERVED` is a
+fact, and whether it is acceptable is the reader's decision: most of what charpy finds is
+behaviour an operator reads and then fixes or accepts the cost of, very little of it must be
+fixed, and much of it is good news -- "answered after the fault", "recovered". Failing the build on
+those would turn it red for a subject that did well, and make every accepted cost a failure
+someone has to silence.
+
+There is no JUnit output. Its four outcomes cannot say what an `OBSERVED` finding is, and a
+dashboard built on the mapping showed a run as mostly green with the findings hidden. SARIF is the
+format whose vocabulary fits; `open-problems.md` records why it is not built yet.
 
 **Never issue a behavioural MUST.** "You violate the spec" from a third party is an opinion requiring
 a clause inventory that rots at every revision. "Your gateway leaks a goroutine per failed upstream

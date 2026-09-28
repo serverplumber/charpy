@@ -15,7 +15,7 @@ import (
 )
 
 // Family is the first segment of a case ID. The list is fixed: family names
-// appear in JUnit classname and become CI history keys, so adding one is a
+// are part of every citation ever quoted in a bug report, so adding one is a
 // design change rather than a case-authoring change.
 type Family string
 
@@ -72,9 +72,6 @@ func ParseID(s string) (ID, error) {
 }
 
 func (id ID) String() string { return string(id.Family) + "/" + id.Name }
-
-// JUnitClass renders the classname a JUnit testcase uses for this case.
-func (id ID) JUnitClass() string { return "charpy." + string(id.Family) }
 
 // Citation is a case ID qualified by the revision it was run against and the
 // seed that drove it. This is the form quoted in reports and bug reports;
@@ -134,16 +131,6 @@ func (c Citation) String() string {
 		b.WriteString(c.Seed)
 	}
 	return b.String()
-}
-
-// JUnitName renders the name a JUnit testcase uses. The seed is deliberately
-// omitted: CI systems key history off classname+name, so a per-run seed there
-// would make every run look like a new test and destroy flake history.
-func (c Citation) JUnitName() string {
-	if c.Revision == "" {
-		return c.ID.Name
-	}
-	return c.ID.Name + "@" + string(c.Revision)
 }
 
 func isKebab(s string) bool {

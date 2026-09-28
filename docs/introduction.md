@@ -64,7 +64,7 @@ charpy is split in two by a file.
                          │   reader ─► layer 1 schemacheck   ─┐                 │
                          │             layer 2 invariant      ├─► report        │
                          │             coverage               │   text · JSONL  │
-                         │             layer 4 reaction       │   · JUnit       │
+                         │             layer 4 reaction       │                 │
                          │             (layer 3 diff: stub)  ─┘                 │
                          └──────────────────────────────────────────────────────┘
 ```
@@ -277,9 +277,10 @@ not report its own injections as findings. It also means those layers judge fram
 **wrote**, and never what the subject **did in response to** a frame charpy wrote. Layer 4 is
 the one that judges the response.
 
-**Report** (`internal/report`). Output formats are text, JSONL (one verdict per line, a sibling
-of the transcript) and JUnit (one testcase per citation, with no seed in any name, so CI flake
-history keys stably). The static HTML report and the divergence table are designed and not
+**Report** (`internal/report`). Output formats are text and JSONL (one verdict per line, a
+sibling of the transcript). The build gate is replay's exit code, which fails on a `MUST` and
+nothing else. There is no JUnit: it cannot say what an `OBSERVED` finding is, and SARIF, which
+can, is an open problem. The static HTML report and the divergence table are designed and not
 built, and `charpy report` exits unimplemented.
 
 ______________________________________________________________________
@@ -307,7 +308,7 @@ ______________________________________________________________________
 | `driver/fleet`    | not built                                   | soak                         |
 | `transcript`      | writer, reader, shared line types           | transcript                   |
 | `oracle/…`        | verdict vocabulary; the §7 layers           | oracle                       |
-| `report`          | text, JSONL and JUnit rendering             | oracle §2                    |
+| `report`          | text and JSONL rendering                    | oracle §2                    |
 
 Owners are documents in `design/`; ADRs are in `design/decisions.md`.
 

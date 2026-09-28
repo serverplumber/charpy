@@ -125,7 +125,7 @@ Left open on purpose; deciding now would be guessing.
 - **Transcript volume.** A six-hour run at moderate rate is millions of frames. Whether that stays
   one JSONL file, rotates, or samples steady-state traffic while keeping every faulted frame is a
   real question and the answer affects the reader, not the schema.
-- **Whether soak verdicts belong in JUnit at all.** "Did not leak over six hours" is not a test case
-  in the shape CI expects, and forcing it into one may be worse than a separate report.
+- **What shape a soak verdict takes.** "Did not leak over six hours" is a trend, not a finding
+  anchored to a frame, and forcing it into the shape of one may be worse than a separate report.
 - **Baseline handling.** Trend invariants need a baseline. Whether that is the run's own first N
   minutes, a stored prior run, or a declared threshold changes what a regression means.

@@ -267,3 +267,64 @@ building soak mode's hardest parts out of order, without the leak-detection payo
 **Trigger to revisit.** Soak mode (v1) shipping — at that point the marginal cost is the
 fail-open and control-plane work alone — or a credible external user asking for it, which would
 tell us which guarantees they actually need rather than which ones we imagine.
+
+---
+
+## Findings have no CI-facing format but the exit code
+
+**Gap.** JUnit has four outcomes -- pass, failure, error, skipped -- and charpy has two verdicts and
+three non-verdicts, one of which, `OBSERVED`, covers both good news ("recovered") and bad ("exited
+after the fault"). The JUnit report rendered only `MUST` as a failure, carried each `OBSERVED`
+finding as a passing test with the finding in `<system-out>`, and the three non-verdicts as skips
+with distinguishing messages. That was honest, but it was a mapping onto a poorer vocabulary: a CI
+system reading it could not tell an `OBSERVED` finding worth a look from a pass without reading the
+text, nor `INCONCLUSIVE` from `SKIPPED` without parsing the message. A dashboard built on it showed
+a run as mostly green with the findings hidden, which misleads more than it informs.
+
+**Decision: JUnit is dropped.** The mismatch is too wide for the format to be useful. The gate is
+the exit code, which is `1` on a `MUST` and nothing else; the record is the JSONL verdicts, which
+keep all five outcomes intact; people read the text report. What remains open is a format a CI
+dashboard can read.
+
+**Why it exists.** JUnit is what every CI system already reads, which is why it was the first
+format (`cebbf5a`) and why dropping it leaves a gap rather than closing one. Its vocabulary was
+designed for tests with an author who decided in advance what passing means. charpy's findings
+are not that: most are facts for a reader to weigh -- fixed, or accepted as a cost -- and very few
+must be fixed.
+
+**Why SARIF, and why it is not closed for v0.** SARIF (OASIS, 2.1.0) is the format whose
+vocabulary fits. A result's `kind` is one of `notApplicable`, `pass`, `fail`, `review`, `open`,
+`informational` or `unavailable`, and its `level` -- `error`, `warning`, `note` -- applies only to
+a `fail`; every other kind has level `none`. That separates "what happened" from "how bad is it"
+in exactly the place JUnit merges them. Its consumers fit the reading model too: a GitHub
+code-scanning alert stays open until it is fixed or dismissed, "won't fix" is a dismissal reason,
+and `partialFingerprints` carries an alert's identity across runs -- the case citation without its
+seed, as case identity already defines it. An accepted cost stays accepted; a new finding shows as
+new. But three things stand in the way:
+
+- **It is built around source code.** A SARIF location is a region of an artifact, and the tools
+  that consume it -- GitHub code scanning chief among them -- show results against files in the
+  repository. charpy's findings are about a running subject, and the natural location, a line of
+  the transcript (`region.startLine` = seq + 1, since seq is dense from zero with the header
+  first), is a file that is not in anyone's repository. `logicalLocations` exist for this, but
+  whether GitHub shows a result with no physical location, and what it does with any `kind` but
+  `fail`, needs a real upload to find out before the format is committed to.
+- **The mapping has open choices.** `MUST` is `fail` with level `error`, and `SKIPPED` is
+  `notApplicable`. But `OBSERVED` could be `review` -- "requires review", which is charpy's stance
+  -- or `informational`, and splitting it that way is the INFORMATIONAL / NON-STRICT grading
+  question, deferred until an ADR decides whether charpy may grade a behaviour at all.
+  `INCONCLUSIVE` reads as `unavailable` ("could not be evaluated"); `UNTRIGGERED` is either that or
+  `notApplicable`, and neither says "the fault never fired" as plainly as charpy does.
+- **Nobody has asked for it.** The exit code covers the CI gate, JSONL covers anything a person
+  wants to query, and a new format is a new contract to keep stable.
+
+**What closing it would take.** A `sarif` format beside `text` and `jsonl` in `internal/report`,
+one result per finding: `ruleId` from the check (and, where there is one, the case id), rules
+metadata with a `helpUri` into `docs/design/`, the citation and seq in the result's properties,
+`partialFingerprints` from the seedless citation, and a location in the transcript. The code is
+small; the decisions above are not. Settling the `OBSERVED` split first would make the SARIF
+mapping follow from it rather than force it.
+
+**Trigger to revisit.** Someone wanting charpy's findings in a code-scanning dashboard or any
+other SARIF consumer, or the INFORMATIONAL / NON-STRICT ADR landing, at which point SARIF is the
+standard carrier for the grade it introduces.

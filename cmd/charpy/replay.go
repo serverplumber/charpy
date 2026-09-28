@@ -29,7 +29,7 @@ import (
 func cmdReplay(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("replay", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	format := fs.String("format", "text", "text, jsonl or junit")
+	format := fs.String("format", "text", "text or jsonl")
 	only := fs.String("oracle", "", "run one layer: schema, invariant, coverage or reaction")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy replay [flags] <transcript.jsonl>\n\n")
@@ -149,12 +149,10 @@ func render(w io.Writer, format string, rep oracle.Report) error {
 	switch format {
 	case "jsonl":
 		return report.JSONL(w, rep)
-	case "junit":
-		return report.JUnit(w, rep)
 	case "text":
 		return text(w, rep)
 	default:
-		return fmt.Errorf("unknown format %q; want text, jsonl or junit", format)
+		return fmt.Errorf("unknown format %q; want text or jsonl", format)
 	}
 }
 

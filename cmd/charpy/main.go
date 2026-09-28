@@ -86,7 +86,7 @@ commands:
   cases     list the case catalogue
   policy    validate a policy or case manifest
   replay    re-run the oracle over a finished transcript
-  report    render a transcript as JUnit XML and static HTML
+  report    render a transcript as static HTML
   version   print the version
 
 exit codes:

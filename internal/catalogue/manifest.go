@@ -315,7 +315,7 @@ func validate(cs *Case, file string) (errs, warnings []string) {
 	}
 
 	if strings.TrimSpace(cs.Summary) == "" {
-		fail("case %q: summary is required; it appears in the report and in JUnit", cs.ID)
+		fail("case %q: summary is required; it appears in the report", cs.ID)
 	}
 
 	switch cs.Status {

@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/xml"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +43,7 @@ func replay(t *testing.T, args ...string) (string, int) {
 func TestReplayIsByteIdentical(t *testing.T) {
 	path := writeTranscript(t, misbehaving)
 
-	for _, format := range []string{"text", "jsonl", "junit"} {
+	for _, format := range []string{"text", "jsonl"} {
 		t.Run(format, func(t *testing.T) {
 			first, code := replay(t, "--format", format, path)
 			second, again := replay(t, "--format", format, path)
@@ -101,36 +100,6 @@ func TestReplayFormats(t *testing.T) {
 			if f["verdict"] == nil || f["check"] == nil || f["run_id"] != "01TEST" {
 				t.Errorf("line %d is missing identity: %v", i+1, f)
 			}
-		}
-	})
-
-	t.Run("junit parses and counts", func(t *testing.T) {
-		out, _ := replay(t, "--format", "junit", path)
-		var suite struct {
-			Tests    int `xml:"tests,attr"`
-			Failures int `xml:"failures,attr"`
-			Skipped  int `xml:"skipped,attr"`
-			Cases    []struct {
-				Name    string `xml:"name,attr"`
-				Failure *struct {
-					Type string `xml:"type,attr"`
-				} `xml:"failure"`
-			} `xml:"testcase"`
-		}
-		if err := xml.Unmarshal([]byte(out), &suite); err != nil {
-			t.Fatalf("junit output is not XML: %v\n%s", err, out)
-		}
-		if suite.Tests != 3 || suite.Failures != 3 {
-			t.Errorf("tests=%d failures=%d, want 3 and 3", suite.Tests, suite.Failures)
-		}
-		var musts int
-		for _, c := range suite.Cases {
-			if c.Failure != nil && c.Failure.Type == "MUST" {
-				musts++
-			}
-		}
-		if musts != 1 {
-			t.Errorf("%d MUST failures in junit, want 1", musts)
 		}
 	})
 

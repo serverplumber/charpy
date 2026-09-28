@@ -489,7 +489,7 @@ already reach the subject, and a gateway run judged by author-only layers would 
 blind spot onto both faces.
 
 **Considered.** A fourth non-verdict for "the fault reached charpy, not the subject". Rejected: the
-verdict vocabulary is a public contract -- JUnit, exit codes, archived transcripts -- and a
+verdict vocabulary is a public contract -- the JSONL report, exit codes, archived transcripts -- and a
 misdirected case is an authoring error, which belongs at load time rather than in every report.
 The reaction layer still reports such a fault as `SKIPPED` with a reason, for transcripts that
 predate the rule and for relayed runs whose traffic the loader cannot see.

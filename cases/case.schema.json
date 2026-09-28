@@ -625,7 +625,7 @@
             "type": "array"
           },
           "summary": {
-            "description": "One sentence; appears in the report and in JUnit.",
+            "description": "One sentence; appears in the report.",
             "minLength": 1,
             "type": "string"
           },

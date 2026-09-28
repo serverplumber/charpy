@@ -61,7 +61,7 @@ status       = "active"
 | `observed_by` | no | What can see the subject's answer: `wire` (default) · `inproc` · `differential`. Selection drops a case no available observer can judge |
 | `verdict` | yes | `MUST` or `OBSERVED` |
 | `derives_from` | yes | `spec:` · `sep:` · `schema:` · `none` |
-| `summary` | yes | One sentence; appears in the report and JUnit |
+| `summary` | yes | One sentence; appears in the report |
 | `status` | no | `active` (default) or `withdrawn`, with `withdrawn_reason` |
 
 ### `[case.match]`

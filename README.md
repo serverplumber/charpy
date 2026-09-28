@@ -45,7 +45,7 @@ HTTP, and judges what they do when a fault reaches them.
 - **An offline oracle:** schema validation (the only source of a MUST), invariants over
   the transcript, and the subject's reaction to each fault — did it answer the next
   question, stop answering, exit, or recover on a fresh session.
-- **Reports** as text, JSONL and JUnit. Replaying a transcript twice gives byte-identical
+- **Reports** as text and JSONL. Replaying a transcript twice gives byte-identical
   verdicts, and CI checks that it does.
 
 **Not built yet:** the gateway driver, which puts charpy on both sides of a subject and
@@ -71,7 +71,7 @@ Against your own server:
 charpy run --case '*' --revision 2025-11-25 --tool <harmless-tool> -- ./your-server
 charpy run --subject-url http://localhost:9000/mcp --case '*' --revision 2025-11-25
 charpy replay charpy-out/<run-id>.jsonl
-charpy replay --format junit charpy-out/<run-id>.jsonl > charpy.xml
+charpy replay --format jsonl charpy-out/<run-id>.jsonl > verdicts.jsonl
 ```
 
 Each case is its own run and writes its own transcript to `charpy-out/`. `--tool`
@@ -164,7 +164,12 @@ a fact that needs no authority behind it.
 
 A check that could not be settled says so instead of passing: **SKIPPED** (it did
 not apply), **INCONCLUSIVE** (the transcript cannot decide it), **UNTRIGGERED** (the
-fault never fired). All three render as skips in JUnit, and none as a pass.
+fault never fired). Every report carries each with its reason, and none as a pass.
+
+Only a MUST fails the build: `charpy replay` exits `1` on a MUST and on nothing else.
+Whether an OBSERVED finding is acceptable is yours to decide. Most of what charpy
+finds, you will read and then either fix or accept the cost of; very little of it must
+be fixed, and some of it is good news, like a subject that recovered.
 
 ## The transcript is the product
 
@@ -214,7 +219,6 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 |---|---|
 | Transcript | JSONL, `schema_version` on every line |
 | Verdicts | JSONL, referencing case citation and frame sequence numbers |
-| Test results | JUnit XML, one `<testcase>` per case citation |
 | Exit code | `0` clean · `1` MUST violation · `2` harness error · `3` subject failed to start · `4` invalid policy |
 
 ## Documentation

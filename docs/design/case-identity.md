@@ -59,12 +59,12 @@ of citation. Applicability is data in the case manifest, never in the ID string.
 | Report, bug report, prose | `stream/truncate-mid-event@2025-11-25#seed=8f2c1a` |
 | Transcript `fault.case_id` | `stream/truncate-mid-event` |
 | Transcript `fault.citation` | full citation |
-| JUnit XML | `<testcase classname="charpy.stream" name="truncate-mid-event@2025-11-25"/>` |
 | CLI selection | `charpy run --case 'stream/*'` — globs match the permanent ID only |
 
-JUnit drops the seed. CI systems key history off `classname`+`name`, so including a per-run seed
-there would make every run look like a brand-new test and destroy flake history. The seed stays in
-the transcript and the report, which is where anyone reproducing the failure will look.
+Anything that keys a finding's identity across runs -- a dashboard's history, a SARIF fingerprint
+(`open-problems.md`) -- drops the seed, `stream/truncate-mid-event@2025-11-25`: a per-run seed there
+would make every run look like a new finding. The seed stays in the transcript and the report,
+which is where anyone reproducing the failure will look.
 
 ---
 
@@ -109,7 +109,7 @@ strong form, at the cost of both properties above.
 ## 3. Families
 
 Fixed list. Adding a family is a design change, not a case-authoring change, because family names
-appear in JUnit `classname` and become CI history keys.
+are part of every citation ever quoted in a bug report.
 
 | Family | Covers |
 |---|---|
@@ -251,7 +251,7 @@ Once a case ID has appeared in a tagged release it is permanent.
 |---|---|
 | Case is wrong or superseded | Mark `status = "withdrawn"` with a `withdrawn_reason`. The ID is never reused and never deleted. Withdrawn cases still parse, so old transcripts and old reports keep resolving. |
 | Behaviour changes in a new revision | Narrow `applies_to` on the existing case and add a new case for the new behaviour. Do not mutate a case's meaning under a stable ID. |
-| Family reorganisation | Not supported. This is the cost of putting families in JUnit `classname`, and it is the cost the scheme is deliberately paying for stability. |
+| Family reorganisation | Not supported. A family is part of every citation already quoted in someone's tracker, and moving a case would orphan them all. It is the cost the scheme is deliberately paying for stability. |
 | Typo in an ID | Fix only before the first release that contains it. After that it is permanent and wrong, which is cheaper than a rename. |
 
 `charpy cases` prints TOML, which is the format the catalogue is written in. The output is a valid
