@@ -81,6 +81,35 @@ type Hostile struct {
 	// fault would pile questions onto a client still answering the first.
 	asks   sync.WaitGroup
 	asking atomic.Bool
+
+	// fromClient is shut when a signal ends the run, so that nothing the
+	// client sends afterwards reaches a transcript the caller is closing.
+	fromClient gate
+}
+
+// gate lets a relay that cannot be waited for be stopped instead. Shutting it
+// waits out the frame in hand, and every frame after that is dropped
+// unrecorded: it arrived after the run ended.
+type gate struct {
+	mu   sync.Mutex
+	shut bool
+}
+
+// pass runs f unless the gate is shut, and reports whether it did.
+func (g *gate) pass(f func()) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.shut {
+		return false
+	}
+	f()
+	return true
+}
+
+func (g *gate) close() {
+	g.mu.Lock()
+	g.shut = true
+	g.mu.Unlock()
 }
 
 // New prepares a run. The reference-peer server is built but not started.
@@ -144,7 +173,7 @@ func (h *Hostile) Run(ctx context.Context) error {
 	clientGone := make(chan struct{})
 	go func() {
 		defer close(clientGone)
-		h.relay(askCtx, h.o.In, h.toServer, transcript.C2S, false)
+		h.relay(askCtx, h.o.In, h.toServer, transcript.C2S, false, &h.fromClient)
 		_ = h.toServer.Close()
 	}()
 
@@ -153,16 +182,23 @@ func (h *Hostile) Run(ctx context.Context) error {
 	s2cDone := make(chan struct{})
 	go func() {
 		defer close(s2cDone)
-		h.relay(askCtx, h.server.Out, h.toClient, transcript.S2C, true)
+		h.relay(askCtx, h.server.Out, h.toClient, transcript.S2C, true, nil)
 	}()
 
 	// The run ends when the client goes away or a signal cancels the context.
 	// Either way, closing the server ends its loop and unblocks the s2c relay,
 	// which reads the server's output -- a pipe that closes only here, so
 	// waiting on the relay before closing it would wedge.
+	//
+	// On a signal the c2s relay is not waited for: it reads the client, which
+	// under --hostile is charpy's stdin, and nothing unblocks that read. It is
+	// shut instead, which waits out the frame it is handling -- the client's
+	// last answer can still be crossing when the signal lands -- so that
+	// nothing it reads afterwards is recorded after Run returns.
 	select {
 	case <-clientGone:
 	case <-ctx.Done():
+		h.fromClient.close()
 	}
 	stopAsking()
 	err := h.server.Close()
@@ -172,7 +208,9 @@ func (h *Hostile) Run(ctx context.Context) error {
 	return err
 }
 
-func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool) {
+// relay carries one direction. A gate, where there is one, is passed for every
+// frame, and a shut gate ends the relay.
+func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool, g *gate) {
 	sc := bufio.NewScanner(from)
 	sc.Buffer(make([]byte, 0, 64<<10), maxFrame)
 
@@ -181,24 +219,33 @@ func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir
 		if len(raw) == 0 {
 			continue
 		}
-		m, _ := envelope.Parse(raw)
-		// Capture a prior resolved id before this frame resolves, so
-		// already_resolved names an earlier answer and not the one in hand.
-		prior, _ := h.x.PriorResolved(dir)
-		h.x.Observe(m, dir)
-
-		if h.x.FollowUp(m, dir) {
-			h.deliver(m, dir, to, nil)
-			continue
+		if g == nil {
+			h.cross(ctx, raw, to, dir, faulted)
+		} else if !g.pass(func() { h.cross(ctx, raw, to, dir, faulted) }) {
+			return
 		}
-		if faulted {
-			if cases := h.match.Select(h.x.FrameOf(m, dir)); len(cases) > 0 {
-				h.applyFault(ctx, cases[0], m, dir, to, prior)
-				continue
-			}
-		}
-		h.deliver(m, dir, to, nil)
 	}
+}
+
+// cross records one frame and delivers it, faulted if a case matches.
+func (h *Hostile) cross(ctx context.Context, raw []byte, to *wire.Stdio, dir transcript.Direction, faulted bool) {
+	m, _ := envelope.Parse(raw)
+	// Capture a prior resolved id before this frame resolves, so
+	// already_resolved names an earlier answer and not the one in hand.
+	prior, _ := h.x.PriorResolved(dir)
+	h.x.Observe(m, dir)
+
+	if h.x.FollowUp(m, dir) {
+		h.deliver(m, dir, to, nil)
+		return
+	}
+	if faulted {
+		if cases := h.match.Select(h.x.FrameOf(m, dir)); len(cases) > 0 {
+			h.applyFault(ctx, cases[0], m, dir, to, prior)
+			return
+		}
+	}
+	h.deliver(m, dir, to, nil)
 }
 
 // declaredOutput is the reference server's declared outputSchema for tool, or
