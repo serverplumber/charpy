@@ -16,6 +16,14 @@
 // lines and its progress all belong to the one downstream session that holds
 // the upstream session they arrived on.
 //
+// It is a control, so it is correct by default: with nothing planted, a run
+// against it must find nothing. Each place a gateway is easy to get wrong is
+// got right on purpose, and lives in its own file -- an idle deadline on
+// upstream calls (idle.go); answers that never name an upstream, a fresh
+// upstream session when one fails, and one call at a time per upstream
+// (upstream.go); and a barrier, so nothing an upstream sent during a call
+// follows the gateway's answer to it (order.go).
+//
 // Names pass through unchanged, with no per-upstream prefix. Conformance calls
 // tools by the names its server declares, and charpy gives each of its
 // upstreams disjoint names, so a call reaching the wrong upstream is a fact on
@@ -49,6 +57,10 @@ type Options struct {
 	HTTPClient *http.Client
 	// Logger receives the gateway's own diagnostics. Nil discards them.
 	Logger *slog.Logger
+	// UpstreamIdle is how long a call may hear nothing from its upstream
+	// before the gateway answers it with an error. Zero takes
+	// DefaultUpstreamIdle.
+	UpstreamIdle time.Duration
 }
 
 // Sessioned is the set of revisions the gateway speaks on both faces. The
@@ -79,6 +91,9 @@ func Handler(o Options) (http.Handler, error) {
 	if o.Logger == nil {
 		o.Logger = slog.New(slog.DiscardHandler)
 	}
+	if o.UpstreamIdle <= 0 {
+		o.UpstreamIdle = DefaultUpstreamIdle
+	}
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return newSession(o).srv
 	}, nil), nil
@@ -99,30 +114,21 @@ type session struct {
 
 	// progress maps a downstream progress token to the call that carried it,
 	// so an upstream's progress lands on the stream of the request it is
-	// about; forwarded counts what has been sent on, and bump is closed and
-	// replaced whenever it grows (see [session.drain]).
-	progress  map[string]context.Context
-	forwarded map[string]int
-	bump      chan struct{}
+	// about.
+	progress map[string]context.Context
 
 	// changed holds the list kinds an upstream's relist actually changed,
 	// so that only those reach the downstream client as list_changed.
 	changed map[string]bool
-}
 
-// upstream is one upstream session, and what its server declared.
-type upstream struct {
-	endpoint string
-	cs       *mcp.ClientSession
-	caps     *mcp.ServerCapabilities
-	watch    *progressWatch
-
-	mu sync.Mutex
-	// calls are the downstream requests in flight to this upstream, newest
-	// last. See [upstream.current].
-	calls []context.Context
-
-	tools, prompts, resources, templates []string
+	// What the downstream client set up, to set up again on an upstream
+	// that had to be reconnected: the protocol version and capabilities it
+	// initialized with, the logging level it asked for, and the resources it
+	// is subscribed to, by owner.
+	version string
+	offered mcp.ClientCapabilities
+	level   *mcp.SetLoggingLevelParams
+	subs    map[string]*upstream
 }
 
 func newSession(o Options) *session {
@@ -133,9 +139,8 @@ func newSession(o Options) *session {
 		resources: map[string]*upstream{},
 		templates: map[string]*upstream{},
 		progress:  map[string]context.Context{},
-		forwarded: map[string]int{},
-		bump:      make(chan struct{}),
 		changed:   map[string]bool{},
+		subs:      map[string]*upstream{},
 	}
 	s.srv = mcp.NewServer(&mcp.Implementation{Name: "charpy-fixture-gateway", Version: "0"}, &mcp.ServerOptions{
 		Logger:                    o.Logger,
@@ -182,7 +187,15 @@ func (s *session) intercept(next mcp.MethodHandler) mcp.MethodHandler {
 				return next(ctx, method, req)
 			}
 			if err := s.open(ctx, ss, p); err != nil {
-				return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: err.Error()}
+				// A collision is the gateway's configuration, and names only
+				// what the client would see listed anyway. Anything else
+				// names an upstream, and goes to the log (see [session.answer]).
+				var col *collision
+				if errors.As(err, &col) {
+					return nil, &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: col.Error()}
+				}
+				s.o.Logger.Warn("opening upstreams", "err", err)
+				return nil, errUnavailable
 			}
 			res, err := next(ctx, method, req)
 			if ir, ok := res.(*mcp.InitializeResult); ok && err == nil {
@@ -194,13 +207,14 @@ func (s *session) intercept(next mcp.MethodHandler) mcp.MethodHandler {
 			res, err := next(ctx, method, req)
 			if p, ok := req.GetParams().(*mcp.SetLoggingLevelParams); ok && err == nil {
 				s.mu.Lock()
+				s.level = p
 				ups := slices.Clone(s.ups)
 				s.mu.Unlock()
+				// An upstream with no live link hears it when it is
+				// reconnected (see [session.restore]).
 				for _, u := range ups {
-					if u.caps.Logging != nil {
-						if err := u.cs.SetLoggingLevel(ctx, p); err != nil {
-							s.o.Logger.Warn("forwarding setLevel", "upstream", u.endpoint, "err", err)
-						}
+					if l := u.live(); l != nil {
+						s.setLevel(ctx, u, l, p)
 					}
 				}
 			}
@@ -211,52 +225,39 @@ func (s *session) intercept(next mcp.MethodHandler) mcp.MethodHandler {
 }
 
 // open dials every upstream for the downstream session being initialized, and
-// registers what each declared. It offers each upstream exactly the client
-// capabilities the downstream client offered, because the gateway can only
-// answer an upstream's sampling or elicitation by asking its own client.
+// registers what each declared.
 func (s *session) open(ctx context.Context, down *mcp.ServerSession, p *mcp.InitializeParams) error {
 	s.mu.Lock()
 	s.down = down
 	s.mu.Unlock()
 
-	version := p.ProtocolVersion
-	if !slices.Contains(Sessioned(), version) {
-		version = string(revision.V20251125)
+	s.version = p.ProtocolVersion
+	if !slices.Contains(Sessioned(), s.version) {
+		s.version = string(revision.V20251125)
 	}
-	var offered mcp.ClientCapabilities
 	if p.Capabilities != nil {
-		offered.Sampling = p.Capabilities.Sampling
-		offered.Elicitation = p.Capabilities.Elicitation
+		s.offered.Sampling = p.Capabilities.Sampling
+		s.offered.Elicitation = p.Capabilities.Elicitation
 	}
 
 	for _, endpoint := range s.o.Upstreams {
-		u := &upstream{endpoint: endpoint, watch: newProgressWatch(s.o.HTTPClient.Transport)}
-		hc := *s.o.HTTPClient
-		hc.Transport = u.watch
-		client := mcp.NewClient(&mcp.Implementation{Name: "charpy-fixture-gateway", Version: "0"}, s.clientOptions(u, offered))
-		if offered.Elicitation != nil {
-			client.AddReceivingMiddleware(s.elicit(u))
-		}
-		cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{
-			Endpoint:   endpoint,
-			HTTPClient: &hc,
-		}, &mcp.ClientSessionOptions{ProtocolVersion: version})
+		u := newUpstream(endpoint, s.o.UpstreamIdle)
+		l, err := s.dial(ctx, u)
 		if err != nil {
 			s.close()
-			return fmt.Errorf("gateway: connecting to %s: %w", endpoint, err)
+			return err
 		}
-		u.cs = cs
-		u.caps = cs.InitializeResult().Capabilities
-		if u.caps == nil {
-			u.caps = &mcp.ServerCapabilities{}
-		}
+		u.set(l)
 		s.mu.Lock()
 		s.ups = append(s.ups, u)
 		s.mu.Unlock()
 	}
 
 	for _, u := range s.ups {
-		if err := s.relist(ctx, u, false); err != nil {
+		lctx, cancel := context.WithTimeout(ctx, u.idle)
+		err := s.relist(lctx, u, u.live(), false)
+		cancel()
+		if err != nil {
 			s.close()
 			return err
 		}
@@ -269,6 +270,87 @@ func (s *session) open(ctx context.Context, down *mcp.ServerSession, p *mcp.Init
 	return nil
 }
 
+// dial opens a session on u. It offers the upstream exactly the client
+// capabilities the downstream client offered, because the gateway can only
+// answer an upstream's sampling or elicitation by asking its own client.
+//
+// Each session gets its own client, HTTP client and barrier, so nothing one
+// session read and never handled can hold up the next.
+func (s *session) dial(ctx context.Context, u *upstream) (*link, error) {
+	b := newBarrier(s.o.HTTPClient.Transport)
+	hc := *s.o.HTTPClient
+	hc.Transport = b
+	client := mcp.NewClient(&mcp.Implementation{Name: "charpy-fixture-gateway", Version: "0"}, s.clientOptions(u, s.offered))
+	if s.offered.Elicitation != nil {
+		client.AddReceivingMiddleware(s.elicit(u))
+	}
+	// Added last, so it is outermost: a marker goes no further.
+	client.AddReceivingMiddleware(b.middleware)
+
+	// The handshake gets the same idle bound as a call: an upstream that
+	// never answers initialize must not hold the downstream one forever.
+	// The session itself outlives this context; the SDK detaches it.
+	cctx, cancel := context.WithTimeout(ctx, u.idle)
+	defer cancel()
+	cs, err := client.Connect(cctx, &mcp.StreamableClientTransport{
+		Endpoint:   u.endpoint,
+		HTTPClient: &hc,
+	}, &mcp.ClientSessionOptions{ProtocolVersion: s.version})
+	if err != nil {
+		return nil, fmt.Errorf("gateway: connecting to %s: %w", u.endpoint, err)
+	}
+	caps := cs.InitializeResult().Capabilities
+	if caps == nil {
+		caps = &mcp.ServerCapabilities{}
+	}
+	l := &link{cs: cs, caps: caps, barrier: b}
+	// A session the upstream ends on its own is gone too.
+	go func() {
+		_ = cs.Wait()
+		u.lose(l)
+	}()
+	return l, nil
+}
+
+// restore brings a reopened link back to where the downstream session had
+// the last one.
+func (s *session) restore(ctx context.Context, u *upstream, l *link) error {
+	if err := s.relist(ctx, u, l, true); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	level := s.level
+	var uris []string
+	for uri, owner := range s.subs {
+		if owner == u {
+			uris = append(uris, uri)
+		}
+	}
+	s.mu.Unlock()
+	if level != nil {
+		s.setLevel(ctx, u, l, level)
+	}
+	if l.caps.Resources != nil && l.caps.Resources.Subscribe {
+		for _, uri := range uris {
+			if err := l.cs.Subscribe(ctx, &mcp.SubscribeParams{URI: uri}); err != nil {
+				s.o.Logger.Warn("resubscribing", "upstream", u.endpoint, "uri", uri, "err", err)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *session) setLevel(ctx context.Context, u *upstream, l *link, p *mcp.SetLoggingLevelParams) {
+	if l.caps.Logging == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, u.idle)
+	defer cancel()
+	if err := l.cs.SetLoggingLevel(ctx, p); err != nil {
+		s.o.Logger.Warn("forwarding setLevel", "upstream", u.endpoint, "err", err)
+	}
+}
+
 // close ends every upstream session.
 func (s *session) close() {
 	s.mu.Lock()
@@ -276,7 +358,9 @@ func (s *session) close() {
 	s.ups = nil
 	s.mu.Unlock()
 	for _, u := range ups {
-		_ = u.cs.Close()
+		if l := u.live(); l != nil {
+			u.lose(l)
+		}
 	}
 }
 
@@ -294,20 +378,21 @@ func (s *session) advertise(ir *mcp.InitializeResult) {
 	caps.Logging, caps.Completions = nil, nil
 	var subscribe bool
 	for _, u := range s.ups {
-		if u.caps.Logging != nil {
+		uc := u.caps()
+		if uc.Logging != nil {
 			caps.Logging = &mcp.LoggingCapabilities{}
 		}
-		if u.caps.Completions != nil {
+		if uc.Completions != nil {
 			caps.Completions = &mcp.CompletionCapabilities{}
 		}
-		if u.caps.Tools != nil {
+		if uc.Tools != nil {
 			caps.Tools = &mcp.ToolCapabilities{ListChanged: true}
 		}
-		if u.caps.Prompts != nil {
+		if uc.Prompts != nil {
 			caps.Prompts = &mcp.PromptCapabilities{ListChanged: true}
 		}
-		if u.caps.Resources != nil {
-			subscribe = subscribe || u.caps.Resources.Subscribe
+		if uc.Resources != nil {
+			subscribe = subscribe || uc.Resources.Subscribe
 			caps.Resources = &mcp.ResourceCapabilities{ListChanged: true}
 		}
 	}
@@ -325,35 +410,37 @@ func (s *session) clientOptions(u *upstream, offered mcp.ClientCapabilities) *mc
 		Capabilities: &offered,
 
 		ToolListChangedHandler: func(ctx context.Context, _ *mcp.ToolListChangedRequest) {
+			u.touch()
 			s.relistOrWarn(ctx, u)
 		},
 		PromptListChangedHandler: func(ctx context.Context, _ *mcp.PromptListChangedRequest) {
+			u.touch()
 			s.relistOrWarn(ctx, u)
 		},
 		ResourceListChangedHandler: func(ctx context.Context, _ *mcp.ResourceListChangedRequest) {
+			u.touch()
 			s.relistOrWarn(ctx, u)
 		},
 		ResourceUpdatedHandler: func(ctx context.Context, req *mcp.ResourceUpdatedNotificationRequest) {
+			u.touch()
 			_ = s.srv.ResourceUpdated(ctx, req.Params)
 		},
 		LoggingMessageHandler: func(_ context.Context, req *mcp.LoggingMessageRequest) {
+			u.touch()
 			if d := s.downstream(); d != nil {
 				_ = d.Log(u.current(), req.Params)
 			}
 		},
 		ProgressNotificationHandler: func(_ context.Context, req *mcp.ProgressNotificationClientRequest) {
+			u.touch()
 			key := tokenKey(req.Params.ProgressToken)
 			ctx, ok := s.progressFor(key)
 			if d := s.downstream(); d != nil && ok {
 				_ = d.NotifyProgress(ctx, req.Params)
-				s.mu.Lock()
-				s.forwarded[key]++
-				close(s.bump)
-				s.bump = make(chan struct{})
-				s.mu.Unlock()
 			}
 		},
 		ElicitationCompleteHandler: func(_ context.Context, req *mcp.ElicitationCompleteNotificationRequest) {
+			u.touch()
 			if d := s.downstream(); d != nil {
 				_ = d.NotifyElicitationComplete(u.current(), req.Params)
 			}
@@ -369,6 +456,7 @@ func (s *session) clientOptions(u *upstream, offered mcp.ClientCapabilities) *mc
 				if err != nil {
 					return nil, err
 				}
+				defer u.ask()()
 				return d.CreateMessageWithTools(u.current(), req.Params)
 			}
 		} else {
@@ -377,6 +465,7 @@ func (s *session) clientOptions(u *upstream, offered mcp.ClientCapabilities) *mc
 				if err != nil {
 					return nil, err
 				}
+				defer u.ask()()
 				return d.CreateMessage(u.current(), req.Params)
 			}
 		}
@@ -404,6 +493,7 @@ func (s *session) elicit(u *upstream) mcp.Middleware {
 			if err != nil {
 				return nil, err
 			}
+			defer u.ask()()
 			return d.Elicit(u.current(), p)
 		}
 	}
@@ -422,43 +512,6 @@ func (s *session) mustDownstream() (*mcp.ServerSession, error) {
 	return nil, errors.New("gateway: no downstream session")
 }
 
-// current is the context an upstream-originated message is sent downstream
-// under. Its value is what the SDK reads to put the message on the stream of
-// a request, so it is the newest downstream call still in flight to this
-// upstream, or a bare context -- the standalone stream -- when none is.
-//
-// Newest is a guess when two calls to one upstream overlap: the upstream
-// session does not say which of its requests an incoming one relates to. The
-// SDK client reads the stream it arrived on and drops that, and the fixture
-// will not reach past it. Progress is exact, because a token names its
-// request.
-func (u *upstream) current() context.Context {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-	if n := len(u.calls); n > 0 {
-		return u.calls[n-1]
-	}
-	return context.Background()
-}
-
-// track records a downstream request in flight to u, and returns the
-// function that ends it.
-func (u *upstream) track(ctx context.Context) func() {
-	u.mu.Lock()
-	u.calls = append(u.calls, ctx)
-	u.mu.Unlock()
-	return func() {
-		u.mu.Lock()
-		defer u.mu.Unlock()
-		for i, c := range u.calls {
-			if c == ctx {
-				u.calls = slices.Delete(u.calls, i, i+1)
-				return
-			}
-		}
-	}
-}
-
 func (s *session) progressFor(key string) (context.Context, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -466,60 +519,14 @@ func (s *session) progressFor(key string) (context.Context, bool) {
 	return ctx, ok
 }
 
-// progressWait bounds how long a finished call waits for progress the
-// upstream sent ahead of its answer. The handlers are already queued when
-// the call returns, so a working gateway never reaches it; it keeps one that
-// stopped forwarding from also never answering.
-const progressWait = 2 * time.Second
-
-// drain waits until the progress u's upstream sent ahead of the call's answer
-// has all been forwarded, so none of it follows the gateway's own answer.
-func (s *session) drain(ctx context.Context, u *upstream, key string) {
-	want, ok := u.watch.Ahead(key)
-	if !ok {
-		return
-	}
-	timeout := time.NewTimer(progressWait)
-	defer timeout.Stop()
-	for {
-		s.mu.Lock()
-		got, bump := s.forwarded[key], s.bump
-		s.mu.Unlock()
-		if got >= want {
-			return
-		}
-		select {
-		case <-bump:
-		case <-ctx.Done():
-			return
-		case <-timeout.C:
-			s.o.Logger.Warn("progress not forwarded before the answer", "upstream", u.endpoint, "want", want, "got", got)
-			return
-		}
-	}
-}
-
-// forward runs a downstream request against its owning upstream, tracking it
-// as in flight for the messages the upstream sends back while it runs.
-func forward[R any](ctx context.Context, u *upstream, call func(context.Context) (R, error)) (R, error) {
-	defer u.track(ctx)()
-	r, err := call(ctx)
-	return r, passError(err)
-}
-
-// passError returns an upstream's JSON-RPC error as the gateway's own, code
-// intact. The SDK client wraps it; a downstream client is owed the error the
-// server sent, not the gateway's account of having received one.
-func passError(err error) error {
-	var rpc *jsonrpc.Error
-	if errors.As(err, &rpc) {
-		return rpc
-	}
-	return err
-}
-
 func (s *session) relistOrWarn(ctx context.Context, u *upstream) {
-	if err := s.relist(ctx, u, true); err != nil {
+	l := u.live()
+	if l == nil {
+		return // relisted when it is reconnected
+	}
+	ctx, cancel := context.WithTimeout(ctx, u.idle)
+	defer cancel()
+	if err := s.relist(ctx, u, l, true); err != nil {
 		s.o.Logger.Warn("relisting upstream", "upstream", u.endpoint, "err", err)
 	}
 }
@@ -529,37 +536,37 @@ func (s *session) relistOrWarn(ctx context.Context, u *upstream) {
 // announce set, the SDK server tells the downstream client which lists
 // changed; the first listing, made while the session opens, announces
 // nothing.
-func (s *session) relist(ctx context.Context, u *upstream, announce bool) error {
+func (s *session) relist(ctx context.Context, u *upstream, l *link, announce bool) error {
 	var (
 		tools     []*mcp.Tool
 		prompts   []*mcp.Prompt
 		resources []*mcp.Resource
 		templates []*mcp.ResourceTemplate
 	)
-	if u.caps.Tools != nil {
-		for t, err := range u.cs.Tools(ctx, nil) {
+	if l.caps.Tools != nil {
+		for t, err := range l.cs.Tools(ctx, nil) {
 			if err != nil {
 				return fmt.Errorf("gateway: listing tools on %s: %w", u.endpoint, err)
 			}
 			tools = append(tools, t)
 		}
 	}
-	if u.caps.Prompts != nil {
-		for p, err := range u.cs.Prompts(ctx, nil) {
+	if l.caps.Prompts != nil {
+		for p, err := range l.cs.Prompts(ctx, nil) {
 			if err != nil {
 				return fmt.Errorf("gateway: listing prompts on %s: %w", u.endpoint, err)
 			}
 			prompts = append(prompts, p)
 		}
 	}
-	if u.caps.Resources != nil {
-		for r, err := range u.cs.Resources(ctx, nil) {
+	if l.caps.Resources != nil {
+		for r, err := range l.cs.Resources(ctx, nil) {
 			if err != nil {
 				return fmt.Errorf("gateway: listing resources on %s: %w", u.endpoint, err)
 			}
 			resources = append(resources, r)
 		}
-		for t, err := range u.cs.ResourceTemplates(ctx, nil) {
+		for t, err := range l.cs.ResourceTemplates(ctx, nil) {
 			if err != nil {
 				return fmt.Errorf("gateway: listing resource templates on %s: %w", u.endpoint, err)
 			}
@@ -586,7 +593,8 @@ func (s *session) relist(ctx context.Context, u *upstream, announce bool) error 
 	} {
 		for _, n := range c.names {
 			if o, ok := c.owner[n]; ok && o != u {
-				return fmt.Errorf("gateway: %s %q is declared by both %s and %s", c.kind, n, o.endpoint, u.endpoint)
+				s.o.Logger.Warn("declared twice", c.kind, n, "upstream", o.endpoint, "and", u.endpoint)
+				return &collision{kind: c.kind, name: n}
 			}
 		}
 	}
@@ -621,15 +629,15 @@ func (s *session) relist(ctx context.Context, u *upstream, announce bool) error 
 	}
 	for _, p := range prompts {
 		s.srv.AddPrompt(p, func(ctx context.Context, req *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
-			return forward(ctx, u, func(ctx context.Context) (*mcp.GetPromptResult, error) {
-				return u.cs.GetPrompt(ctx, req.Params)
+			return forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (*mcp.GetPromptResult, error) {
+				return cs.GetPrompt(ctx, req.Params)
 			})
 		})
 		s.prompts[p.Name] = u
 	}
 	read := func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-		return forward(ctx, u, func(ctx context.Context) (*mcp.ReadResourceResult, error) {
-			return u.cs.ReadResource(ctx, req.Params)
+		return forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (*mcp.ReadResourceResult, error) {
+			return cs.ReadResource(ctx, req.Params)
 		})
 	}
 	for _, r := range resources {
@@ -647,6 +655,15 @@ func (s *session) relist(ctx context.Context, u *upstream, announce bool) error 
 		s.templates[t.URITemplate] = u
 	}
 	return nil
+}
+
+// collision is two upstreams declaring the same name. Its text names the
+// name, which the downstream client would see listed anyway, and not the
+// upstreams; the log has those.
+type collision struct{ kind, name string }
+
+func (c *collision) Error() string {
+	return fmt.Sprintf("gateway: %s %q is declared by two upstreams", c.kind, c.name)
 }
 
 func sameSet(a, b []string) bool {
@@ -702,28 +719,19 @@ func (s *session) callTool(u *upstream) mcp.ToolHandler {
 		if len(req.Params.Arguments) > 0 {
 			params.Arguments = req.Params.Arguments
 		}
-		tok := req.Params.GetProgressToken()
-		if tok == nil {
-			return forward(ctx, u, func(ctx context.Context) (*mcp.CallToolResult, error) {
-				return u.cs.CallTool(ctx, params)
-			})
-		}
-
-		key := tokenKey(tok)
-		s.mu.Lock()
-		s.progress[key] = ctx
-		s.mu.Unlock()
-		defer func() {
+		if tok := req.Params.GetProgressToken(); tok != nil {
+			key := tokenKey(tok)
 			s.mu.Lock()
-			delete(s.progress, key)
-			delete(s.forwarded, key)
+			s.progress[key] = ctx
 			s.mu.Unlock()
-			u.watch.Forget(key)
-		}()
-		return forward(ctx, u, func(ctx context.Context) (*mcp.CallToolResult, error) {
-			res, err := u.cs.CallTool(ctx, params)
-			s.drain(ctx, u, key)
-			return res, err
+			defer func() {
+				s.mu.Lock()
+				delete(s.progress, key)
+				s.mu.Unlock()
+			}()
+		}
+		return forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (*mcp.CallToolResult, error) {
+			return cs.CallTool(ctx, params)
 		})
 	}
 }
@@ -745,11 +753,11 @@ func (s *session) complete(ctx context.Context, req *mcp.CompleteRequest) (*mcp.
 		}
 		s.mu.Unlock()
 	}
-	if u == nil || u.caps.Completions == nil {
+	if u == nil || u.caps().Completions == nil {
 		return &mcp.CompleteResult{Completion: mcp.CompletionResultDetails{Values: []string{}}}, nil
 	}
-	return forward(ctx, u, func(ctx context.Context) (*mcp.CompleteResult, error) {
-		return u.cs.Complete(ctx, req.Params)
+	return forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (*mcp.CompleteResult, error) {
+		return cs.Complete(ctx, req.Params)
 	})
 }
 
@@ -775,12 +783,17 @@ func (s *session) subscribe(ctx context.Context, req *mcp.SubscribeRequest) erro
 	if u == nil {
 		return mcp.ResourceNotFoundError(req.Params.URI)
 	}
-	if u.caps.Resources == nil || !u.caps.Resources.Subscribe {
+	if uc := u.caps(); uc.Resources == nil || !uc.Resources.Subscribe {
 		return &jsonrpc.Error{Code: jsonrpc.CodeMethodNotFound, Message: "upstream does not support subscriptions"}
 	}
-	_, err := forward(ctx, u, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, u.cs.Subscribe(ctx, req.Params)
+	_, err := forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (struct{}, error) {
+		return struct{}{}, cs.Subscribe(ctx, req.Params)
 	})
+	if err == nil {
+		s.mu.Lock()
+		s.subs[req.Params.URI] = u
+		s.mu.Unlock()
+	}
 	return err
 }
 
@@ -789,8 +802,13 @@ func (s *session) unsubscribe(ctx context.Context, req *mcp.UnsubscribeRequest) 
 	if u == nil {
 		return mcp.ResourceNotFoundError(req.Params.URI)
 	}
-	_, err := forward(ctx, u, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, u.cs.Unsubscribe(ctx, req.Params)
+	_, err := forward(s, ctx, u, func(ctx context.Context, cs *mcp.ClientSession) (struct{}, error) {
+		return struct{}{}, cs.Unsubscribe(ctx, req.Params)
 	})
+	if err == nil {
+		s.mu.Lock()
+		delete(s.subs, req.Params.URI)
+		s.mu.Unlock()
+	}
 	return err
 }

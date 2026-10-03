@@ -22,6 +22,8 @@ func main() {
 	var o gateway.Options
 	addr := flag.String("http", "127.0.0.1:0", "address the downstream face listens on")
 	verbose := flag.Bool("v", false, "log the gateway's diagnostics to stderr")
+	flag.DurationVar(&o.UpstreamIdle, "idle", gateway.DefaultUpstreamIdle,
+		"how long a call may hear nothing from its upstream before it fails")
 	flag.Func("upstream", "a Streamable HTTP upstream endpoint (repeatable)", func(s string) error {
 		o.Upstreams = append(o.Upstreams, s)
 		return nil

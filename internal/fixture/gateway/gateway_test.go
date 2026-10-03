@@ -397,8 +397,11 @@ func TestCollidingNamesAreRefused(t *testing.T) {
 
 	_, err = mcp.NewClient(&mcp.Implementation{Name: "down"}, nil).
 		Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: gw.URL}, nil)
-	if err == nil || !strings.Contains(err.Error(), `tool "b_echo" is declared by both`) {
+	if err == nil || !strings.Contains(err.Error(), `tool "b_echo" is declared by two upstreams`) {
 		t.Fatalf("err = %v, want the collision named", err)
+	}
+	if strings.Contains(err.Error(), "127.0.0.1") {
+		t.Errorf("the collision names an upstream: %v", err)
 	}
 }
 
@@ -466,5 +469,57 @@ func TestElicitationIsPassedOnAsAsked(t *testing.T) {
 	}
 	if p := <-asked; p.Message != "pick" {
 		t.Errorf("asked %q", p.Message)
+	}
+}
+
+// A log message the upstream sends just before answering must still reach the
+// caller on the call's own stream. Once the gateway has answered there is no
+// such stream, and a client without a standalone one never sees the message:
+// conformance's logging scenario lost one about one run in seven that way.
+func TestLogsSentJustBeforeTheAnswerArrive(t *testing.T) {
+	up := mcp.NewServer(&mcp.Implementation{Name: "logs"}, nil)
+	mcp.AddTool(up, &mcp.Tool{Name: "logs"}, func(ctx context.Context, req *mcp.CallToolRequest, _ any) (*mcp.CallToolResult, any, error) {
+		for _, m := range []string{"one", "two", "three"} {
+			_ = req.Session.Log(ctx, &mcp.LoggingMessageParams{Level: "info", Data: m})
+		}
+		return &mcp.CallToolResult{}, nil, nil
+	})
+	h, err := gateway.Handler(gateway.Options{Upstreams: []string{serve(t, up)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gw := httptest.NewServer(h)
+	t.Cleanup(gw.Close)
+
+	var mu sync.Mutex
+	var got []string
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "down"}, &mcp.ClientOptions{
+		LoggingMessageHandler: func(_ context.Context, req *mcp.LoggingMessageRequest) {
+			mu.Lock()
+			defer mu.Unlock()
+			got = append(got, req.Params.Data.(string))
+		},
+	}).Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: gw.URL, DisableStandaloneSSE: true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	if err := cs.SetLoggingLevel(t.Context(), &mcp.SetLoggingLevelParams{Level: "info"}); err != nil {
+		t.Fatal(err)
+	}
+
+	const calls = 50
+	for range calls {
+		if _, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: "logs"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// What arrived on the calls' streams has arrived; the client's own
+	// handlers may trail (go-sdk #1337), so give them a moment.
+	time.Sleep(200 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 3*calls {
+		t.Errorf("the caller received %d of %d log messages", len(got), 3*calls)
 	}
 }
