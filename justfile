@@ -19,6 +19,12 @@ mcp_repo    := "https://github.com/modelcontextprotocol/modelcontextprotocol"
 schema_base := "https://raw.githubusercontent.com/modelcontextprotocol/modelcontextprotocol/" + mcp_commit + "/schema"
 revisions   := "2024-11-05 2025-03-26 2025-06-18 2025-11-25 2026-07-28 draft"
 
+# fixture-conformance: the revision whose requirement set the suite scores, and
+# the port the upstream it fronts listens on (the gateway takes an ephemeral
+# one and says which).
+conformance_revision := "2025-11-25"
+conformance_port     := "9330"
+
 version := `git describe --tags --always --dirty 2>/dev/null || echo 0.1.0-dev`
 commit  := `git rev-parse --short HEAD 2>/dev/null || echo unknown`
 
@@ -82,6 +88,42 @@ determinism:
 # Validate the shipped case catalogue
 cases:
     {{go}} test ./internal/catalogue/... -run TestShippedCatalogue -v
+
+# The fixture gateway is held to the precondition every subject is: it passes
+# server conformance, in front of a server that does. The upstream is run
+# through the suite first, so a failure through the gateway is the gateway's.
+# Not part of check: it is a precondition of the gateway runs, not of the build.
+# Run the conformance suite against the fixture gateway
+fixture-conformance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp=$(mktemp -d)
+    pids=()
+    trap 'kill "${pids[@]}" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+    {{go}} build -o "$tmp/everything-server" github.com/modelcontextprotocol/go-sdk/conformance/everything-server
+    {{go}} build -o "$tmp/fixture-gateway" ./internal/fixture/gateway/cmd/fixture-gateway
+
+    upstream=http://127.0.0.1:{{conformance_port}}/
+    "$tmp/everything-server" -http 127.0.0.1:{{conformance_port}} -stateless=false 2>"$tmp/upstream.log" &
+    pids+=($!)
+    until curl -s -o /dev/null "$upstream"; do
+      kill -0 "${pids[0]}" 2>/dev/null || { cat "$tmp/upstream.log"; exit 1; }
+      sleep 0.1
+    done
+
+    # The gateway prints its URL once it is listening.
+    "$tmp/fixture-gateway" -upstream "$upstream" >"$tmp/gateway.url" &
+    pids+=($!)
+    until [ -s "$tmp/gateway.url" ]; do
+      kill -0 "${pids[1]}" 2>/dev/null || exit 1
+      sleep 0.1
+    done
+    gateway=$(head -n1 "$tmp/gateway.url")
+
+    echo "== everything-server, directly"
+    conformance server --url "$upstream" --requirements {{conformance_revision}}
+    echo "== through the fixture gateway"
+    conformance server --url "$gateway" --requirements {{conformance_revision}}
 
 # Open a transcript in duckdb with the view `t` bound to it
 repl transcript="testdata/transcripts/truncate-mid-event.jsonl":

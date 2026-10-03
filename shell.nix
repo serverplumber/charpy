@@ -9,8 +9,24 @@ let
     sha256 = "sha256-ZKhUe/2IJUq1JhKxKMu8rbkgSGmPP2ZCqlIPn40aGCM=";
   };
 in
-{ pkgs ? import nixpkgs { } }:
+{
+  pkgs ? import nixpkgs { },
+}:
 
+let
+  # The MCP conformance suite, which every subject -- the fixture gateway
+  # included -- is held to before charpy's results about it mean anything.
+  #
+  # Deliberately unpinned, unlike everything else here: this is the packaging
+  # flake's head and its `main`, upstream main as of that flake's lock. It
+  # checks the fixture outside `just check`, and the fixture should meet the
+  # suite as it now stands, not as it stood when this line was written. The
+  # flake also pins every release by name, for whenever a result has to stay
+  # fixed. getFlake needs the flakes feature, which the packaging needs anyway.
+  conformance =
+    (builtins.getFlake "github:serverplumber/mcp-conformance")
+    .packages.${pkgs.stdenv.hostPlatform.system}.main;
+in
 pkgs.mkShell {
   name = "charpy-dev";
   packages = with pkgs; [
@@ -38,6 +54,8 @@ pkgs.mkShell {
     taplo
 
     curl # just vendor-schemas, just vendor-specs
+
+    conformance # just fixture-conformance
   ];
 
   shellHook = ''
