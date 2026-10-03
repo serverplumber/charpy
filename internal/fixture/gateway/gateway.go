@@ -61,6 +61,11 @@ type Options struct {
 	// before the gateway answers it with an error. Zero takes
 	// DefaultUpstreamIdle.
 	UpstreamIdle time.Duration
+	// UpstreamHeader is sent on every upstream request: the gateway's
+	// credential for its upstreams.
+	UpstreamHeader http.Header
+	// Plants are the bugs planted on purpose; none by default. See [Plant].
+	Plants []Plant
 }
 
 // Sessioned is the set of revisions the gateway speaks on both faces. The
@@ -93,6 +98,11 @@ func Handler(o Options) (http.Handler, error) {
 	}
 	if o.UpstreamIdle <= 0 {
 		o.UpstreamIdle = DefaultUpstreamIdle
+	}
+	for _, p := range o.Plants {
+		if !slices.Contains(Plants, p) {
+			return nil, fmt.Errorf("gateway: unknown plant %q", p)
+		}
 	}
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
 		return newSession(o).srv
@@ -241,7 +251,7 @@ func (s *session) open(ctx context.Context, down *mcp.ServerSession, p *mcp.Init
 	}
 
 	for _, endpoint := range s.o.Upstreams {
-		u := newUpstream(endpoint, s.o.UpstreamIdle)
+		u := newUpstream(endpoint, s.o.UpstreamIdle, !s.planted(PlantNoDeadline))
 		l, err := s.dial(ctx, u)
 		if err != nil {
 			s.close()
@@ -277,7 +287,14 @@ func (s *session) open(ctx context.Context, down *mcp.ServerSession, p *mcp.Init
 // Each session gets its own client, HTTP client and barrier, so nothing one
 // session read and never handled can hold up the next.
 func (s *session) dial(ctx context.Context, u *upstream) (*link, error) {
-	b := newBarrier(s.o.HTTPClient.Transport)
+	base := s.o.HTTPClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if len(s.o.UpstreamHeader) > 0 {
+		base = &headerTransport{base: base, header: s.o.UpstreamHeader}
+	}
+	b := newBarrier(base)
 	hc := *s.o.HTTPClient
 	hc.Transport = b
 	client := mcp.NewClient(&mcp.Implementation{Name: "charpy-fixture-gateway", Version: "0"}, s.clientOptions(u, s.offered))
@@ -308,6 +325,7 @@ func (s *session) dial(ctx context.Context, u *upstream) (*link, error) {
 	go func() {
 		_ = cs.Wait()
 		u.lose(l)
+		s.cascade()
 	}()
 	return l, nil
 }

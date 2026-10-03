@@ -93,8 +93,10 @@ cases:
 # server conformance, in front of a server that does. The upstream is run
 # through the suite first, so a failure through the gateway is the gateway's.
 # Not part of check: it is a precondition of the gateway runs, not of the build.
-# Run the conformance suite against the fixture gateway
-fixture-conformance:
+# A planted fixture must pass too -- a plant shows only under a fault -- so
+# `just fixture-conformance leak,cascade` checks that.
+# Run the conformance suite against the fixture gateway, optionally planted
+fixture-conformance plants="":
     #!/usr/bin/env bash
     set -euo pipefail
     tmp=$(mktemp -d)
@@ -112,17 +114,18 @@ fixture-conformance:
     done
 
     # The gateway prints its URL once it is listening.
-    "$tmp/fixture-gateway" -upstream "$upstream" >"$tmp/gateway.url" &
+    "$tmp/fixture-gateway" -upstream "$upstream" -plant "{{plants}}" >"$tmp/gateway.url" &
     pids+=($!)
     until [ -s "$tmp/gateway.url" ]; do
       kill -0 "${pids[1]}" 2>/dev/null || exit 1
       sleep 0.1
     done
     gateway=$(head -n1 "$tmp/gateway.url")
+    plants="{{plants}}"
 
     echo "== everything-server, directly"
     conformance server --url "$upstream" --requirements {{conformance_revision}}
-    echo "== through the fixture gateway"
+    echo "== through the fixture gateway${plants:+, planted: $plants}"
     conformance server --url "$gateway" --requirements {{conformance_revision}}
 
 # Open a transcript in duckdb with the view `t` bound to it

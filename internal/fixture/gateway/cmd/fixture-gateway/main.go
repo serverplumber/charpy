@@ -3,8 +3,10 @@
 //
 //	fixture-gateway -http 127.0.0.1:8080 -upstream http://127.0.0.1:3000/mcp
 //
-// -upstream repeats, once per upstream. A test instrument, not a deliverable:
-// see package gateway.
+// -upstream repeats, once per upstream, and -upstream-header once per header
+// sent to them. -plant takes a comma-separated list of the bugs to plant
+// (leak, nodeadline, cascade); none by default. A test instrument, not a
+// deliverable: see package gateway.
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/serverplumber/charpy/internal/fixture/gateway"
 )
@@ -27,6 +30,22 @@ func main() {
 	flag.Func("upstream", "a Streamable HTTP upstream endpoint (repeatable)", func(s string) error {
 		o.Upstreams = append(o.Upstreams, s)
 		return nil
+	})
+	flag.Func("upstream-header", "a `Name: value` header sent upstream (repeatable)", func(s string) error {
+		name, value, ok := strings.Cut(s, ":")
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("want Name: value, got %q", s)
+		}
+		if o.UpstreamHeader == nil {
+			o.UpstreamHeader = http.Header{}
+		}
+		o.UpstreamHeader.Add(strings.TrimSpace(name), strings.TrimSpace(value))
+		return nil
+	})
+	flag.Func("plant", "comma-separated bugs to plant: leak, nodeadline, cascade", func(s string) error {
+		ps, err := gateway.ParsePlants(s)
+		o.Plants = append(o.Plants, ps...)
+		return err
 	})
 	flag.Parse()
 

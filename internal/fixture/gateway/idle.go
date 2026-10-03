@@ -53,7 +53,9 @@ func (u *upstream) touch() {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	for _, c := range u.calls {
-		c.timer.Reset(u.idle)
+		if c.timer != nil {
+			c.timer.Reset(u.idle)
+		}
 	}
 }
 

@@ -362,7 +362,8 @@ ______________________________________________________________________
 transcript in both directions, oracle layers 1, 2 (I1–I3) and 4 (reaction,
 expectations, recovery), coverage, two report formats, the determinism
 gate, `cases` and `policy validate`, and the fixture gateway the gateway
-driver will be pointed at, conformant and with nothing planted yet.
+driver will be pointed at: conformant, with three bugs that can be planted
+behind flags.
 
 **Designed and not built.**
 

@@ -16,6 +16,9 @@ import (
 type upstream struct {
 	endpoint string
 	idle     time.Duration
+	// deadline is whether calls get the idle deadline at all; PlantNoDeadline
+	// takes it away.
+	deadline bool
 
 	// dialing serializes (re)connecting, so concurrent callers that find the
 	// link down open one session between them, not one each.
@@ -51,8 +54,8 @@ type link struct {
 	barrier *barrier
 }
 
-func newUpstream(endpoint string, idle time.Duration) *upstream {
-	return &upstream{endpoint: endpoint, idle: idle, freed: make(chan struct{}), known: &mcp.ServerCapabilities{}}
+func newUpstream(endpoint string, idle time.Duration, deadline bool) *upstream {
+	return &upstream{endpoint: endpoint, idle: idle, deadline: deadline, freed: make(chan struct{}), known: &mcp.ServerCapabilities{}}
 }
 
 // live is the current link, or nil.
@@ -109,7 +112,9 @@ func (u *upstream) start(ctx context.Context) (*call, error) {
 		if len(u.calls) == 0 || u.asking > 0 {
 			cctx, cancel := context.WithCancelCause(ctx)
 			c := &call{ctx: cctx, cancel: cancel}
-			c.timer = time.AfterFunc(u.idle, func() { u.expire(c) })
+			if u.deadline {
+				c.timer = time.AfterFunc(u.idle, func() { u.expire(c) })
+			}
 			u.calls = append(u.calls, c)
 			u.mu.Unlock()
 			return c, nil
@@ -126,7 +131,9 @@ func (u *upstream) start(ctx context.Context) (*call, error) {
 
 // finish ends a call, its deadline with it, and admits the next.
 func (u *upstream) finish(c *call) {
-	c.timer.Stop()
+	if c.timer != nil {
+		c.timer.Stop()
+	}
 	c.cancel(nil)
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -165,6 +172,10 @@ func (s *session) link(ctx context.Context, u *upstream) (*link, error) {
 	defer u.dialing.Unlock()
 	if l := u.live(); l != nil {
 		return l, nil
+	}
+	if s.planted(PlantCascade) {
+		// The downstream session went down with the upstream one.
+		return nil, errors.New("gateway: upstream session ended")
 	}
 	l, err := s.dial(ctx, u)
 	if err != nil {
@@ -222,6 +233,9 @@ func (s *session) answer(ctx context.Context, u *upstream, l *link, err error) e
 	}
 	if errors.Is(context.Cause(ctx), errIdle) {
 		s.o.Logger.Warn("upstream idle", "upstream", u.endpoint, "after", u.idle)
+		if s.planted(PlantLeak) {
+			return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: s.leaked(u, "timed out", err)}
+		}
 		return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "gateway: upstream timed out"}
 	}
 	if ctx.Err() != nil {
@@ -231,6 +245,10 @@ func (s *session) answer(ctx context.Context, u *upstream, l *link, err error) e
 	s.o.Logger.Warn("upstream call failed", "upstream", u.endpoint, "err", err)
 	if l != nil {
 		u.lose(l)
+		s.cascade()
+	}
+	if s.planted(PlantLeak) {
+		return &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: s.leaked(u, "failed", err)}
 	}
 	return errUnavailable
 }

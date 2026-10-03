@@ -456,6 +456,10 @@ function from transcript to verdicts.
   and with nothing planted a run against it must find nothing. Faults are
   planted behind flags, each one showing only under a fault, so a run
   against a planted fixture shows the oracle finding exactly that and
-  nothing else; none is planted yet. It will also exercise the in-process
-  driver under `-race`. It is a test instrument, not a deliverable, and
+  nothing else: `leak` (an upstream failure's error carries the upstream's
+  address and credential; I5), `nodeadline` (a hung upstream hangs its
+  caller; reaction) and `cascade` (a failed upstream session ends the
+  downstream one; reaction). `just fixture-conformance
+  leak,nodeadline,cascade` shows a planted fixture still conformant. It
+  will also exercise the in-process driver under `-race`. It is a test instrument, not a deliverable, and
   must not grow into one.
