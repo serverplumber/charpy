@@ -169,14 +169,14 @@ Require a correlated two-face transcript.
 | **I7** | `merged-manifest-consistency` | Across a `list_changed` fan-out there is no window in which a tool name resolves to the wrong upstream. |
 
 I5 works on redacted transcripts because redaction is a stable digest, not
-erasure: the invariant proves the *same* secret appeared on both faces
+erasure: the invariant proves the _same_ secret appeared on both faces
 without the transcript itself becoming a secret.
 
 **But I5 names four things, and the transcript does not carry them the same
 way, so neither does the comparison.** "Verbatim" means something different
 in each arm:
 
-| What | How the transcript carries it | How I5 compares | What *verbatim* means here |
+| What | How the transcript carries it | How I5 compares | What _verbatim_ means here |
 |---|---|---|---|
 | Credentials on the redaction policy's name list — `Authorization`, `Cookie`, `X-Api-Key` and the rest (`transcript.md` §5) | A stable digest of the whole value | Digest equality | The entire header value, byte for byte |
 | Session identifiers | In the clear, in `session.mcp_session_id` and in the header beside it | Value comparison | The identifier appearing anywhere in a downstream frame, a larger value included |
@@ -185,13 +185,13 @@ in each arm:
 Session identifiers are deliberately not digested. `session.mcp_session_id`
 is a first-class transcript field, so digesting the header while printing
 the field beside it would be incoherent rather than safe, and I6 needs the
-value legible to say *which* session observed *whose* frame — a finding
+value legible to say _which_ session observed _whose_ frame — a finding
 reading "session `<redacted:sha256:9f3a…>` observed a frame belonging to
 `<redacted:sha256:1c8e…>`" is not one anybody can act on — and those are
 elided; the real markers carry all sixty-four characters.
 
 The asymmetry runs in charpy's favour and should not be tidied away: a
-value carried in the clear can be found *inside* a larger one, which a
+value carried in the clear can be found _inside_ a larger one, which a
 digest structurally cannot. The clear-value arms are the stronger test. The
 digest arm is the one carrying the limitation below.
 
@@ -199,8 +199,8 @@ digest arm is the one carrying the limitation below.
 it.** The digest is of the exact bytes, so that arm catches a credential
 forwarded unchanged and misses one the gateway re-encoded — base64-wrapped,
 re-signed into a new JWT, or embedded inside a larger header value. A pass
-is therefore reported as *"no verbatim credential propagation observed"*,
-never as *"no credential leak"*: the stronger claim was not tested, and a
+is therefore reported as _"no verbatim credential propagation observed"_,
+never as _"no credential leak"_: the stronger claim was not tested, and a
 pass must not be citable as proof of it. The gap and the tractable
 narrowing (charpy plants the upstream credentials, so it can precompute
 digests of known transformations) are scoped in `../open-problems.md`. The
@@ -225,7 +225,7 @@ invariant is `SKIPPED` with reason `not-applicable-to-revision`, and its
 role is taken by I9 and I11.
 
 I7 is the sharpest v0 gateway invariant. The failure it looks for is a
-*window*, not a state: during fan-out the merged manifest is briefly
+_window_, not a state: during fan-out the merged manifest is briefly
 inconsistent and a call routed in that window reaches the wrong upstream.
 Detecting it requires ordering across both faces, which is why the
 transcript's single monotonic `seq` across all line types matters.
@@ -313,7 +313,7 @@ has no generated artifact behind it.
 
 **Who was asked.** `fault_applied` records the direction of the frame the
 fault acted on (`detail.direction`), which names the recipient. A fault on
-a frame the subject *sent* reached charpy's own peer, and the subject was
+a frame the subject _sent_ reached charpy's own peer, and the subject was
 never asked. That is reported as `SKIPPED` with reason
 `fault-reached-charpy`, never read as a pass. The loader is what keeps such
 a case out of the catalogue; this is the backstop for relayed runs and for
@@ -331,7 +331,7 @@ subject.** Walking forward from the fault, on its connection:
 | a request after the fault was still open when the run ended | `OBSERVED` — did not answer, and for how long |
 | nothing asked the subject anything after the fault | `INCONCLUSIVE`, `nothing-asked-after-fault` |
 
-A request asked *before* the fault does not count even if it is answered
+A request asked _before_ the fault does not count even if it is answered
 after: the question is whether the subject still serves, and that exchange
 was already under way. A request charpy tampered with is not a question the
 subject can be held to. The unanswered row is worded as the fact it is --
@@ -393,7 +393,7 @@ will ever notice.
 
 The liveness clock starts at the **fault's end** -- `fault_withdrawn` for a
 hold, the charpy-initiated `stream_close` for a truncation that closes --
-not at fault application: the question is recovery *after* charpy stops
+not at fault application: the question is recovery _after_ charpy stops
 interfering. The driver fires the probe there, on a **fresh** session,
 because after a truncation the client's own session may be wedged and
 liveness is about the subject resuming service, not that session surviving.
@@ -422,7 +422,7 @@ probe.
 A recovery verdict is `OBSERVED`, never `MUST`: recovery has no generated
 artifact behind it, so the layer reports the fact -- recovered, or did not
 recover within the budget -- for a human to weigh rather than failing the
-build. Reporting the *success* is the point; almost nobody tests recovery,
+build. Reporting the _success_ is the point; almost nobody tests recovery,
 so "recovered in 1.2s" is the observation worth making, not a silence.
 
 Liveness budgets are declared per case as `liveness_probe_within_ms` and
@@ -459,7 +459,8 @@ function from transcript to verdicts.
   nothing else: `leak` (an upstream failure's error carries the upstream's
   address and credential; I5), `nodeadline` (a hung upstream hangs its
   caller; reaction) and `cascade` (a failed upstream session ends the
-  downstream one; reaction). `just fixture-conformance
-  leak,nodeadline,cascade` shows a planted fixture still conformant. It
-  will also exercise the in-process driver under `-race`. It is a test instrument, not a deliverable, and
-  must not grow into one.
+  downstream one; reaction).
+  `just fixture-conformance leak,nodeadline,cascade` shows a planted
+  fixture still conformant. It will also exercise the in-process driver
+  under `-race`. It is a test instrument, not a deliverable, and must not
+  grow into one.
