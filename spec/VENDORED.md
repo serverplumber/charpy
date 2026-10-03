@@ -1,37 +1,41 @@
 # Vendored MCP specification prose
 
-The specification text for every protocol revision charpy supports, copied from
-`modelcontextprotocol/modelcontextprotocol` at `docs/specification/<revision>/`, `.mdx` files only
-(two screenshot PNGs are deliberately excluded).
+The specification text for every protocol revision charpy supports, copied
+from `modelcontextprotocol/modelcontextprotocol` at
+`docs/specification/<revision>/`, `.mdx` files only (two screenshot PNGs
+are deliberately excluded).
 
-Vendored for the same reason as the schemas (`../schema/VENDORED.md`), plus one of its own: the
-design docs quote normative clauses and `derives_from` cites `spec:` paths, and a citation that
-resolves only against a moving external website is a citation that rots. Every clause charpy's
-documents rely on is checkable in-repo, offline, at the exact commit recorded here.
+Vendored for the same reason as the schemas (`../schema/VENDORED.md`), plus
+one of its own: the design docs quote normative clauses and `derives_from`
+cites `spec:` paths, and a citation that resolves only against a moving
+external website is a citation that rots. Every clause charpy's documents
+rely on is checkable in-repo, offline, at the exact commit recorded here.
 
 ## Provenance
 
 - Source: <https://github.com/modelcontextprotocol/modelcontextprotocol>
-- Commit: `aa8ce049f089f92618340190d4ece141f663310d` (same pull as the schemas)
+- Commit: `aa8ce049f089f92618340190d4ece141f663310d` (same pull as the
+  schemas)
 - Pulled: 2026-09-09
-- Contents: 142 `.mdx` files across `2024-11-05`, `2025-03-26`, `2025-06-18`, `2025-11-25`,
-  `2026-07-28`, `draft`
+- Contents: 142 `.mdx` files across `2024-11-05`, `2025-03-26`,
+  `2025-06-18`, `2025-11-25`, `2026-07-28`, `draft`
 
 ## Refreshing
 
-```
+```text
 just vendor-specs
 ```
 
-Manual by design, pinned to the commit in the justfile: bump `mcp_commit` there, run
-`just vendor-specs` and `just vendor-schemas` together so prose and schema never come from
-different commits, update both VENDORED.md files, and re-check the claims below.
+Manual by design, pinned to the commit in the justfile: bump `mcp_commit`
+there, run `just vendor-specs` and `just vendor-schemas` together so prose
+and schema never come from different commits, update both VENDORED.md
+files, and re-check the claims below.
 
 ## Claims checked against this pull
 
-The design docs assert protocol facts that constrain the architecture. Each was verified against
-this vendored text on 2026-09-09. Line numbers are valid for this pull only; re-verify and update
-when refreshing.
+The design docs assert protocol facts that constrain the architecture. Each
+was verified against this vendored text on 2026-09-09. Line numbers are
+valid for this pull only; re-verify and update when refreshing.
 
 | Claim (where asserted) | Verified at |
 |---|---|
@@ -50,4 +54,5 @@ when refreshing.
 | `-32042` `URLElicitationRequiredError` exists on 2025-11-25 (`revisions.md` §5) | `2025-11-25/client/elicitation.mdx:426` |
 | `traceparent`/`tracestate`/`baggage` in `_meta` are an explicit exception to the prefix rule (ADR-005) | `2026-07-28/basic/index.mdx:421` |
 
-No contradictions found: every checked assertion in the design docs matches the vendored text.
+No contradictions found: every checked assertion in the design docs matches
+the vendored text.

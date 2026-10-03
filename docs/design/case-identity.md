@@ -2,21 +2,26 @@
 
 Status: **Decided.**
 
-Autobahn's durability comes from `case 6.4.3` being citable across implementations and years. charpy
-needs the same property against a protocol that shipped four revisions in eighteen months. This
-document defines the scheme and, more importantly, records why it is shaped the way it is — the
-constraints outlast the syntax.
+Autobahn's durability comes from `case 6.4.3` being citable across
+implementations and years. charpy needs the same property against a
+protocol that shipped four revisions in eighteen months. This document
+defines the scheme and, more importantly, records why it is shaped the way
+it is — the constraints outlast the syntax.
 
 ## 0. Requirements
 
-The scheme has to satisfy four things at once, and they pull against each other:
+The scheme has to satisfy four things at once, and they pull against each
+other:
 
-1. **A citation must be revision-unambiguous.** Otherwise the suite rots into arguments about
-   whether a failure is a failure, because the behaviour a case tests may have changed under it.
-2. **A case must be reproducible from its identifier plus a seed**, with no other state.
-3. **Identifiers must be stable under the addition of new cases.** No renumbering, ever.
-4. **The scheme must express both** a case that applies to a range of revisions and one that applies
-   to exactly one.
+1. **A citation must be revision-unambiguous.** Otherwise the suite rots
+   into arguments about whether a failure is a failure, because the
+   behaviour a case tests may have changed under it.
+2. **A case must be reproducible from its identifier plus a seed**, with no
+   other state.
+3. **Identifiers must be stable under the addition of new cases.** No
+   renumbering, ever.
+4. **The scheme must express both** a case that applies to a range of
+   revisions and one that applies to exactly one.
 
 ---
 
@@ -24,7 +29,7 @@ The scheme has to satisfy four things at once, and they pull against each other:
 
 A case has a **permanent ID** and is quoted as a **citation**.
 
-```
+```text
 Permanent ID   stream/truncate-mid-event
 Citation       stream/truncate-mid-event@2025-11-25#seed=8f2c1a
 ```
@@ -39,7 +44,7 @@ Citation       stream/truncate-mid-event@2025-11-25#seed=8f2c1a
 
 Grammar:
 
-```
+```text
 citation    = case-id [ "@" revision ] [ "#seed=" seed ]
 case-id     = family "/" name
 family      = 1*( LOWER / DIGIT )
@@ -49,8 +54,9 @@ revision    = 4DIGIT "-" 2DIGIT "-" 2DIGIT / "draft"
 seed        = 6*16HEXDIG
 ```
 
-The permanent ID never changes and never contains a date. Revision and seed qualify it at the point
-of citation. Applicability is data in the case manifest, never in the ID string.
+The permanent ID never changes and never contains a date. Revision and seed
+qualify it at the point of citation. Applicability is data in the case
+manifest, never in the ID string.
 
 ### Rendering
 
@@ -61,55 +67,65 @@ of citation. Applicability is data in the case manifest, never in the ID string.
 | Transcript `fault.citation` | full citation |
 | CLI selection | `charpy run --case 'stream/*'` — globs match the permanent ID only |
 
-Anything that keys a finding's identity across runs -- a dashboard's history, a SARIF fingerprint
-(`open-problems.md`) -- drops the seed, `stream/truncate-mid-event@2025-11-25`: a per-run seed there
-would make every run look like a new finding. The seed stays in the transcript and the report,
-which is where anyone reproducing the failure will look.
+Anything that keys a finding's identity across runs -- a dashboard's
+history, a SARIF fingerprint (`open-problems.md`) -- drops the seed,
+`stream/truncate-mid-event@2025-11-25`: a per-run seed there would make
+every run look like a new finding. The seed stays in the transcript and the
+report, which is where anyone reproducing the failure will look.
 
 ---
 
 ## 2. Why revision is not in the permanent ID
 
-Requirement 1 is often stated more strongly: that the ID string itself must contain the revision.
-This design satisfies the weaker and, we think, correct form — the *citation* is unambiguous —
-because two of charpy's own outputs need **one identity per behaviour**:
+Requirement 1 is often stated more strongly: that the ID string itself must
+contain the revision. This design satisfies the weaker and, we think,
+correct form — the *citation* is unambiguous — because two of charpy's own
+outputs need **one identity per behaviour**:
 
-- **The divergence table** (`oracle.md` §5) pivots the same case across Go, TypeScript and Python
-  *and* across revisions. With revision-prefixed IDs, `2025-06-18/stream/truncate-mid-event` and
-  `2026-07-28/stream/truncate-mid-event` are unrelated strings, and the pivot becomes prefix
-  stripping — which is to say, the scheme would encode a relationship it then forces every consumer
-  to decode.
-- **Cross-revision regression.** "Did this behaviour change between 2025-06-18 and 2025-11-25?" is
-  one of the more valuable questions charpy can answer, and it is a `GROUP BY case_id` over the
-  transcript. It should not require string surgery.
+- **The divergence table** (`oracle.md` §5) pivots the same case across Go,
+  TypeScript and Python *and* across revisions. With revision-prefixed IDs,
+  `2025-06-18/stream/truncate-mid-event` and
+  `2026-07-28/stream/truncate-mid-event` are unrelated strings, and the
+  pivot becomes prefix stripping — which is to say, the scheme would encode
+  a relationship it then forces every consumer to decode.
+- **Cross-revision regression.** "Did this behaviour change between
+  2025-06-18 and 2025-11-25?" is one of the more valuable questions charpy
+  can answer, and it is a `GROUP BY case_id` over the transcript. It should
+  not require string surgery.
 
-A revision-prefixed scheme also duplicates the entire catalogue per revision, so a case applying to
-five revisions is five entries that must be kept in sync by hand. The `applies_to` range in §4 does
-that job in one line.
+A revision-prefixed scheme also duplicates the entire catalogue per
+revision, so a case applying to five revisions is five entries that must be
+kept in sync by hand. The `applies_to` range in §4 does that job in one
+line.
 
 Against the four requirements in §0:
 
-1. *Revision-unambiguous.* Every citation carries it; the bare ID is never quoted as a verdict.
-2. *Reproducible from ID plus seed.* `case-id + revision + seed` fully determines a run — see §5.
+1. *Revision-unambiguous.* Every citation carries it; the bare ID is never
+   quoted as a verdict.
+2. *Reproducible from ID plus seed.* `case-id + revision + seed` fully
+   determines a run — see §5.
 3. *Stable under addition.* Nothing is numbered, so nothing renumbers.
 4. *Ranges and exact pins.* `applies_to` accepts both.
 
 ### Rejected alternatives
 
-**Hierarchical numbers (`6.4.3`).** Maximum citability and the strongest precedent, but the taxonomy
-is baked into the identifier: reorganising families forces renumbering, which is exactly the
-stability requirement 3 asks for. It also carries no revision at all, so `6.4.3 failed` against a
+**Hierarchical numbers (`6.4.3`).** Maximum citability and the strongest
+precedent, but the taxonomy is baked into the identifier: reorganising
+families forces renumbering, which is exactly the stability requirement 3
+asks for. It also carries no revision at all, so `6.4.3 failed` against a
 five-revision matrix is exactly the ambiguity requirement 1 rules out.
 
-**Revision-prefixed IDs (`2026-07-28/stream/truncate-mid-event`).** Satisfies requirement 1 in the
-strong form, at the cost of both properties above.
+**Revision-prefixed IDs (`2026-07-28/stream/truncate-mid-event`).**
+Satisfies requirement 1 in the strong form, at the cost of both properties
+above.
 
 ---
 
 ## 3. Families
 
-Fixed list. Adding a family is a design change, not a case-authoring change, because family names
-are part of every citation ever quoted in a bug report.
+Fixed list. Adding a family is a design change, not a case-authoring
+change, because family names are part of every citation ever quoted in a
+bug report.
 
 | Family | Covers |
 |---|---|
@@ -123,16 +139,17 @@ are part of every citation ever quoted in a bug report.
 | `gateway` | Seam behaviour observable only with both faces correlated |
 | `liveness` | Recovery after a withdrawn fault |
 
-`gateway` is a family rather than a subject tag because its cases are structurally different: they
-require a correlated two-face transcript and are skipped rather than failed when correlation is
-degraded (see `transcript.md` §4).
+`gateway` is a family rather than a subject tag because its cases are
+structurally different: they require a correlated two-face transcript and
+are skipped rather than failed when correlation is degraded (see
+`transcript.md` §4).
 
 ---
 
 ## 4. The case manifest
 
-Cases live in `cases/*.toml`. One `[[case]]` per case. See `policy-format.md` for the full schema;
-the identity-bearing fields are:
+Cases live in `cases/*.toml`. One `[[case]]` per case. See
+`policy-format.md` for the full schema; the identity-bearing fields are:
 
 ```toml
 [[case]]
@@ -146,7 +163,8 @@ summary      = "SSE stream cut in the middle of an event's data field."
 
 ### `applies_to`
 
-A revision range over the ordered revision list in `revisions.md`. Accepted forms:
+A revision range over the ordered revision list in `revisions.md`. Accepted
+forms:
 
 | Form | Meaning |
 |---|---|
@@ -155,12 +173,15 @@ A revision range over the ordered revision list in `revisions.md`. Accepted form
 | `">=2025-03-26,<2026-07-28"` | Half-open range — the sessioned era |
 | `"*"` | Every revision charpy knows |
 
-Ranges resolve against the ordered list, not against date arithmetic, so `draft` sorts last and a
-future revision inserted into the list is picked up by every open-ended range automatically.
+Ranges resolve against the ordered list, not against date arithmetic, so
+`draft` sorts last and a future revision inserted into the list is picked
+up by every open-ended range automatically.
 
-A case whose `applies_to` excludes the negotiated revision is **skipped**, and the skip is recorded
-with its reason. Skips are not passes; the report distinguishes them, because "we did not test this"
-and "this passed" are different claims and conflating them is how suites acquire false confidence.
+A case whose `applies_to` excludes the negotiated revision is **skipped**,
+and the skip is recorded with its reason. Skips are not passes; the report
+distinguishes them, because "we did not test this" and "this passed" are
+different claims and conflating them is how suites acquire false
+confidence.
 
 ### `derives_from`
 
@@ -174,16 +195,19 @@ The durable citation — where the expectation comes from. One of:
 | `none` | Behaviour with no normative source; only legal when `verdict = "OBSERVED"` |
 
 A `spec:` path resolves against the vendored prose: `spec:R/path#anchor` is
-`spec/R/path*.mdx` in this repository, at the commit `spec/VENDORED.md` records — the citation
-stays checkable offline and after upstream reorganises its site.
+`spec/R/path*.mdx` in this repository, at the commit `spec/VENDORED.md`
+records — the citation stays checkable offline and after upstream
+reorganises its site.
 
-`derives_from = "none"` is deliberately available and deliberately ugly. A case with no normative
-source is legitimate — goroutine leaks have no clause — but it should be visible in review that the
-case is asserting a judgement rather than citing an artifact.
+`derives_from = "none"` is deliberately available and deliberately ugly. A
+case with no normative source is legitimate — goroutine leaks have no
+clause — but it should be visible in review that the case is asserting a
+judgement rather than citing an artifact.
 
-**Constraint, enforced at load:** `verdict = "MUST"` requires a `schema:` source. charpy never issues
-a behavioural MUST (`oracle.md` §2); only a generated normative artifact rejecting a frame earns one.
-The loader rejects any other combination rather than trusting the author to remember.
+**Constraint, enforced at load:** `verdict = "MUST"` requires a `schema:`
+source. charpy never issues a behavioural MUST (`oracle.md` §2); only a
+generated normative artifact rejecting a frame earns one. The loader
+rejects any other combination rather than trusting the author to remember.
 
 ---
 
@@ -191,55 +215,67 @@ The loader rejects any other combination rather than trusting the author to reme
 
 `case-id + revision + seed` fully determines a run, with one honest caveat.
 
-The seed drives every random choice the case makes: byte offsets for truncation, which occurrence to
-target when the matcher permits several, generated payload content, and jitter within a case's
-scheduling. `charpy run --case X --revision R --seed S` reproduces the same *injected* behaviour
-byte for byte.
+The seed drives every random choice the case makes: byte offsets for
+truncation, which occurrence to target when the matcher permits several,
+generated payload content, and jitter within a case's scheduling.
+`charpy run --case X --revision R --seed S` reproduces the same *injected*
+behaviour byte for byte.
 
 ### What the promise depends on
 
-The promise has two ways of being false, and both are repaired rather than qualified.
+The promise has two ways of being false, and both are repaired rather than
+qualified.
 
-**The traffic must not depend on what else was armed.** Under owned stimulus a fault changes what
-the peer does next — `truncate` with `then = "close"` ends the stream, so a call another case was
-waiting for never happens — so two cases armed against one session each see traffic the other
-shaped. ADR-012 arms one case per run for a better reason than this one, and this falls out of it:
-with nothing else armed, there is nothing else for the traffic to depend on. Relayed runs arm many
-cases at once and make no occurrence-reproducibility claim at all (`interposer.md` §5.1).
+**The traffic must not depend on what else was armed.** Under owned
+stimulus a fault changes what the peer does next — `truncate` with
+`then = "close"` ends the stream, so a call another case was waiting for
+never happens — so two cases armed against one session each see traffic the
+other shaped. ADR-012 arms one case per run for a better reason than this
+one, and this falls out of it: with nothing else armed, there is nothing
+else for the traffic to depend on. Relayed runs arm many cases at once and
+make no occurrence-reproducibility claim at all (`interposer.md` §5.1).
 
-**The randomness must depend on the case, and not on what ran before it.** A single run-level
-generator drawn from in sequence would make case X's bytes a function of which cases preceded it,
-so `charpy run --case X --seed S` would reproduce X only when X ran first — which is the promise
-being false rather than qualified.
+**The randomness must depend on the case, and not on what ran before it.**
+A single run-level generator drawn from in sequence would make case X's
+bytes a function of which cases preceded it, so
+`charpy run --case X --seed S` would reproduce X only when X ran first —
+which is the promise being false rather than qualified.
 
 So each draw comes from its own stream, seeded by domain separation:
 
-    ChaCha8( SHA-256( run_seed ‖ case_id ‖ purpose ) )
+```text
+ChaCha8( SHA-256( run_seed ‖ case_id ‖ purpose ) )
+```
 
-`math/rand/v2`'s generators are named algorithms rather than an unspecified source, so a seed
-produces the same bytes years later; `math/rand`'s top-level functions never promised that.
-ChaCha8 takes a 32-byte seed, which is exactly SHA-256's output, so nothing is truncated or
-expanded to fit.
+`math/rand/v2`'s generators are named algorithms rather than an unspecified
+source, so a seed produces the same bytes years later; `math/rand`'s
+top-level functions never promised that. ChaCha8 takes a 32-byte seed,
+which is exactly SHA-256's output, so nothing is truncated or expanded to
+fit.
 
-*Purpose* is the part that is easy to leave out and expensive to add later. One stream per case
-would still be order-dependent one level down: adding a seeded parameter to a mechanism would shift
-every draw after it, and a citation that promised byte-for-byte reproduction would quietly stop
-delivering it. Naming the draw — `cut_offset`, `payload`, `jitter` — makes each stream independent
-of every other, so a mechanism can grow a parameter without invalidating archived citations.
+*Purpose* is the part that is easy to leave out and expensive to add later.
+One stream per case would still be order-dependent one level down: adding a
+seeded parameter to a mechanism would shift every draw after it, and a
+citation that promised byte-for-byte reproduction would quietly stop
+delivering it. Naming the draw — `cut_offset`, `payload`, `jitter` — makes
+each stream independent of every other, so a mechanism can grow a parameter
+without invalidating archived citations.
 
-This is a permanent semantic contract rather than an implementation detail: every archived
-transcript reproduces only while this function returns the same bytes. That is why it is stdlib
-hashing and a specified generator, and why it is written down here beside the promise it keeps.
+This is a permanent semantic contract rather than an implementation detail:
+every archived transcript reproduces only while this function returns the
+same bytes. That is why it is stdlib hashing and a specified generator, and
+why it is written down here beside the promise it keeps.
 
-What the seed cannot reproduce is the subject. A remote server may be differently loaded, may have been
-redeployed, or may simply be nondeterministic. This is why the determinism guarantee lives in the
-oracle rather than the run — see `decisions.md` ADR-001. The seed reproduces what charpy did; the
-transcript records what happened; the oracle turns a transcript into verdicts deterministically and
-forever.
+What the seed cannot reproduce is the subject. A remote server may be
+differently loaded, may have been redeployed, or may simply be
+nondeterministic. This is why the determinism guarantee lives in the oracle
+rather than the run — see `decisions.md` ADR-001. The seed reproduces what
+charpy did; the transcript records what happened; the oracle turns a
+transcript into verdicts deterministically and forever.
 
-A citation in a bug report should therefore carry the transcript, not just the ID. The ID says which
-case; the transcript says what was observed. `charpy report --cite <citation>` emits both as a
-minimal reproducer.
+A citation in a bug report should therefore carry the transcript, not just
+the ID. The ID says which case; the transcript says what was observed.
+`charpy report --cite <citation>` emits both as a minimal reproducer.
 
 ---
 
@@ -254,9 +290,10 @@ Once a case ID has appeared in a tagged release it is permanent.
 | Family reorganisation | Not supported. A family is part of every citation already quoted in someone's tracker, and moving a case would orphan them all. It is the cost the scheme is deliberately paying for stability. |
 | Typo in an ID | Fix only before the first release that contains it. After that it is permanent and wrong, which is cheaper than a rename. |
 
-`charpy cases` prints TOML, which is the format the catalogue is written in. The output is a valid
-manifest subset, so "show me what would run" pastes back in as "run exactly this" — a property a
-rendered table would not have.
+`charpy cases` prints TOML, which is the format the catalogue is written
+in. The output is a valid manifest subset, so "show me what would run"
+pastes back in as "run exactly this" — a property a rendered table would
+not have.
 
-`charpy cases --json` emits the full catalogue with IDs, ranges, sources and status, so external
-tooling can track the set without parsing TOML.
+`charpy cases --json` emits the full catalogue with IDs, ranges, sources
+and status, so external tooling can track the set without parsing TOML.

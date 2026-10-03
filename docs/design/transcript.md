@@ -1,22 +1,24 @@
 # Transcript
 
-Status: **Decided.** Schema version 1. The machine-readable schema lives in the code tree at
-`schema/transcript/v1.json`; this document is the rationale for it.
+Status: **Decided.** Schema version 1. The machine-readable schema lives in
+the code tree at `schema/transcript/v1.json`; this document is the
+rationale for it.
 
-The transcript is the product. The oracle, the report, the divergence table and any external tooling
-are consumers of it; nothing in the run path depends on them. Retrofitting correlation into a
-one-sided transcript is a rewrite, not a patch, so correlation and face tagging are present from the
+The transcript is the product. The oracle, the report, the divergence table
+and any external tooling are consumers of it; nothing in the run path
+depends on them. Retrofitting correlation into a one-sided transcript is a
+rewrite, not a patch, so correlation and face tagging are present from the
 first line written.
 
 ---
 
 ## 1. Shape
 
-One JSON object per line, UTF-8, `\n`-terminated, append-only. Every line carries `schema_version`
-and `type`.
+One JSON object per line, UTF-8, `\n`-terminated, append-only. Every line
+carries `schema_version` and `type`.
 
-Three line types. Only the first is obvious; the other two are load-bearing, and their absence would
-be discovered late and expensively:
+Three line types. Only the first is obvious; the other two are
+load-bearing, and their absence would be discovered late and expensively:
 
 | `type` | Purpose |
 |---|---|
@@ -24,15 +26,18 @@ be discovered late and expensively:
 | `frame` | One protocol frame crossing one face, with its raw bytes. |
 | `event` | Everything that is not a frame but changes what the oracle should conclude. |
 
-**Why events exist.** Under 2026-07-28 Streamable HTTP, *closing the response stream is itself the
-cancellation signal* — there is no `notifications/cancelled` on the wire. An oracle that sees only
-frames cannot evaluate the cancellation invariant at all, because the event it must reason about is
-the absence of bytes. The same applies to fault withdrawal — liveness is measured from the withdrawal
-instant (`oracle.md` §6) — and to subprocess exit and connection teardown. Frames alone are
+**Why events exist.** Under 2026-07-28 Streamable HTTP,
+*closing the response stream is itself the cancellation signal* — there is
+no `notifications/cancelled` on the wire. An oracle that sees only frames
+cannot evaluate the cancellation invariant at all, because the event it
+must reason about is the absence of bytes. The same applies to fault
+withdrawal — liveness is measured from the withdrawal instant (`oracle.md`
+§6) — and to subprocess exit and connection teardown. Frames alone are
 insufficient.
 
-`seq` is monotonic across **all three types** in one shared sequence, assigned under a single lock at
-capture time. Line order in the file therefore equals `seq` order, and the oracle may rely on that.
+`seq` is monotonic across **all three types** in one shared sequence,
+assigned under a single lock at capture time. Line order in the file
+therefore equals `seq` order, and the oracle may rely on that.
 
 ---
 
@@ -49,17 +54,19 @@ capture time. Line order in the file therefore equals `seq` order, and the oracl
 }
 ```
 
-Both clocks are always present. `t_mono_ns` is charpy's injected clock and is what cases and the
-oracle reason about; `t_wall` exists solely to join against the subject's own telemetry and log
-output. Nothing in the oracle may read `t_wall` — see `decisions.md` ADR-001.
+Both clocks are always present. `t_mono_ns` is charpy's injected clock and
+is what cases and the oracle reason about; `t_wall` exists solely to join
+against the subject's own telemetry and log output. Nothing in the oracle
+may read `t_wall` — see `decisions.md` ADR-001.
 
 ---
 
 ## 3. Dimensions
 
-Every frame is tagged with four independent dimensions. Three identify *whose* traffic it is; the
-fourth identifies which way it went. Getting the first three wrong is the mistake that forces a
-rewrite, so all of them are present from v0 even where v0 can only ever emit one value.
+Every frame is tagged with four independent dimensions. Three identify
+*whose* traffic it is; the fourth identifies which way it went. Getting the
+first three wrong is the mistake that forces a rewrite, so all of them are
+present from v0 even where v0 can only ever emit one value.
 
 | Dimension | Answers | v0 cardinality |
 |---|---|---|
@@ -70,15 +77,17 @@ rewrite, so all of them are present from v0 even where v0 can only ever emit one
 
 ### `face`
 
-Which side of the subject this frame crossed. Defined against the **subject**, never against charpy.
+Which side of the subject this frame crossed. Defined against the
+**subject**, never against charpy.
 
 | Value | Meaning |
 |---|---|
 | `downstream` | The subject's client-facing side. charpy is playing the client here. |
 | `upstream` | The subject's server-facing side. charpy is playing the server here. |
 
-A server under test has only a `downstream` face — charpy is its client. A client under test has only
-an `upstream` face. A gateway has both, which is the entire point.
+A server under test has only a `downstream` face — charpy is its client. A
+client under test has only an `upstream` face. A gateway has both, which is
+the entire point.
 
 ### `direction`
 
@@ -89,28 +98,35 @@ The MCP role direction, independent of who charpy is impersonating.
 | `c2s` | Client role to server role |
 | `s2c` | Server role to client role |
 
-So a hostile response charpy emits as a fake upstream server is `face=upstream, direction=s2c`, and
-the gateway's forwarded copy of a client request is `face=upstream, direction=c2s`. The pair is
-always unambiguous; neither field alone is.
+So a hostile response charpy emits as a fake upstream server is
+`face=upstream, direction=s2c`, and the gateway's forwarded copy of a
+client request is `face=upstream, direction=c2s`. The pair is always
+unambiguous; neither field alone is.
 
 ### `client_id` and `session_id`
 
-`client_id` identifies which synthetic client the traffic belongs to. `session_id` identifies which
-logical session — one client may open, drop and reopen many sessions over a long run.
+`client_id` identifies which synthetic client the traffic belongs to.
+`session_id` identifies which logical session — one client may open, drop
+and reopen many sessions over a long run.
 
-**In v0 there is exactly one of each**, and they are emitted as the constant `c0` and a per-run
-session id. They cost one field apiece and buy nothing today.
+**In v0 there is exactly one of each**, and they are emitted as the
+constant `c0` and a per-run session id. They cost one field apiece and buy
+nothing today.
 
-They are here anyway because soak mode (`soak.md`) drives a *fleet* of synthetic clients, and **a
-transcript that assumes a single session is the same category of mistake as a transcript that assumes
-a single face.** Both are retrofits that touch every writer, every reader, every invariant and every
-stored transcript. The one-sided-transcript mistake is the one this design was built to avoid; making
-it a second time in a different dimension would be worse, because it would be knowing.
+They are here anyway because soak mode (`soak.md`) drives a *fleet* of
+synthetic clients, and **a transcript that assumes a single session is the
+same category of mistake as a transcript that assumes a single face.** Both
+are retrofits that touch every writer, every reader, every invariant and
+every stored transcript. The one-sided-transcript mistake is the one this
+design was built to avoid; making it a second time in a different dimension
+would be worse, because it would be knowing.
 
-The concrete cost of getting it wrong: `"30% of clients reconnect every 2s without closing"` is only
-expressible if `client_id` is a column you can partition on. Retrofitted, every transcript captured
-before the retrofit becomes unanalysable for exactly the questions soak mode exists to ask — and
-`oracle.md` §1 promises that transcripts captured today re-run against invariants written later. That
+The concrete cost of getting it wrong:
+`"30% of clients reconnect every 2s without closing"` is only expressible
+if `client_id` is a column you can partition on. Retrofitted, every
+transcript captured before the retrofit becomes unanalysable for exactly
+the questions soak mode exists to ask — and `oracle.md` §1 promises that
+transcripts captured today re-run against invariants written later. That
 promise is only worth something if the dimensions are already there.
 
 ### charpy's ids versus the subject's
@@ -122,19 +138,23 @@ Note the parallel with `link.charpy_id` and `link.trace_id`:
 | `session_id` — charpy's logical session, present in every revision | `session.mcp_session_id` — the protocol session, `<= 2025-11-25` only |
 | `link.charpy_id` — charpy's join key | `link.trace_id` — whoever started the trace |
 
-They are never the same field and must never be conflated. SEP-2567 removed the protocol session in
-2026-07-28; charpy's `session_id` is unaffected, because it denotes charpy's own notion of a client's
-connection lifetime and identity binding, which exists regardless of what the protocol calls it.
+They are never the same field and must never be conflated. SEP-2567 removed
+the protocol session in 2026-07-28; charpy's `session_id` is unaffected,
+because it denotes charpy's own notion of a client's connection lifetime
+and identity binding, which exists regardless of what the protocol calls
+it.
 
 ---
 
 ## 4. Correlation
 
-It is tempting to describe this as "the correlation key charpy attached", but that holds only when
-charpy is the forwarder. When the **subject** forwards — which is exactly the gateway case charpy
-exists for — charpy cannot carry its own key across, because the gateway is free to rewrite the
-JSON-RPC `id`, and frequently does. **Joining gateway faces on `id` is wrong by construction.**
-That is why `link` is a distinct object rather than a reuse of `id`.
+It is tempting to describe this as "the correlation key charpy attached",
+but that holds only when charpy is the forwarder. When the **subject**
+forwards — which is exactly the gateway case charpy exists for — charpy
+cannot carry its own key across, because the gateway is free to rewrite the
+JSON-RPC `id`, and frequently does.
+**Joining gateway faces on `id` is wrong by construction.** That is why
+`link` is a distinct object rather than a reuse of `id`.
 
 Three regimes. `link.via` records which one produced this frame's key.
 
@@ -147,16 +167,19 @@ Three regimes. `link.via` records which one produced this frame's key.
 
 ### The credibility rule
 
-**Never emit a gateway verdict from an `inferred` join.** An invariant that requires correlation is
-*skipped*, with the degraded join recorded as the skip reason, rather than evaluated on a guess.
+**Never emit a gateway verdict from an `inferred` join.** An invariant that
+requires correlation is *skipped*, with the degraded join recorded as the
+skip reason, rather than evaluated on a guess.
 
-This is the same rule as the verdict policy in `oracle.md` §2, and for the same reason: a false
-correlation produces a confident, specific, wrong accusation about someone else's credential
-handling, and that is a credibility loss which can be spent exactly once.
+This is the same rule as the verdict policy in `oracle.md` §2, and for the
+same reason: a false correlation produces a confident, specific, wrong
+accusation about someone else's credential handling, and that is a
+credibility loss which can be spent exactly once.
 
-Separately, a subject that drops trace context is itself a reportable **OBSERVED** finding — it
-breaks distributed tracing for everyone downstream of it. The correlation mechanism doubles as a
-test, which is a pleasant result rather than a designed one.
+Separately, a subject that drops trace context is itself a reportable
+**OBSERVED** finding — it breaks distributed tracing for everyone
+downstream of it. The correlation mechanism doubles as a test, which is a
+pleasant result rather than a designed one.
 
 ### Fields
 
@@ -171,29 +194,37 @@ test, which is a pleasant result rather than a designed one.
 }
 ```
 
-The object is named `link` because that is exactly what it is — the key you join the two faces on,
-and in DuckDB literally the join column. `charpy_id` is charpy's own identifier, distinguished from
-the W3C `trace_id`/`span_id` beside it, which belong to whoever started the trace.
+The object is named `link` because that is exactly what it is — the key you
+join the two faces on, and in DuckDB literally the join column. `charpy_id`
+is charpy's own identifier, distinguished from the W3C `trace_id`/`span_id`
+beside it, which belong to whoever started the trace.
 
-charpy stamps `traceparent`, and propagates `tracestate` and `baggage`, into `_meta` on every request
-it originates, on both transports. On HTTP it additionally sets the `traceparent` header. Per SEP-414
-these three keys are an explicit exception to the reverse-DNS prefix rule and need no namespace.
+charpy stamps `traceparent`, and propagates `tracestate` and `baggage`,
+into `_meta` on every request it originates, on both transports. On HTTP it
+additionally sets the `traceparent` header. Per SEP-414 these three keys
+are an explicit exception to the reverse-DNS prefix rule and need no
+namespace.
 
-The `inferred` regime plants **no marker in the traffic**. An earlier draft had charpy add a
-`dev.charpy/` key inside tool arguments so a forwarded copy could be recognised; that is deleted,
-because it perturbs the subject — a gateway validating arguments against an `inputSchema` with
-`additionalProperties: false` rejects the call *because charpy was watching*. Distinctness comes
-instead from the scenario player, which controls every argument byte it originates and makes each
-call unique inside values the tool legitimately accepts (`interposer.md` §6). Where charpy does
-need a `_meta` key of its own it uses the `dev.charpy/` prefix, which is permitted: the reserved
-prefixes are those whose second label is `modelcontextprotocol` or `mcp`, and `charpy` is neither.
+The `inferred` regime plants **no marker in the traffic**. An earlier draft
+had charpy add a `dev.charpy/` key inside tool arguments so a forwarded
+copy could be recognised; that is deleted, because it perturbs the subject
+— a gateway validating arguments against an `inputSchema` with
+`additionalProperties: false` rejects the call
+*because charpy was watching*. Distinctness comes instead from the scenario
+player, which controls every argument byte it originates and makes each
+call unique inside values the tool legitimately accepts (`interposer.md`
+§6). Where charpy does need a `_meta` key of its own it uses the
+`dev.charpy/` prefix, which is permitted: the reserved prefixes are those
+whose second label is `modelcontextprotocol` or `mcp`, and `charpy` is
+neither.
 
 ---
 
 ## 5. Frame lines
 
-Envelope fields are **flattened to top level** rather than nested. They are the fields every query
-filters on, and the DuckDB one-liners the README advertises should stay one-liners:
+Envelope fields are **flattened to top level** rather than nested. They are
+the fields every query filters on, and the DuckDB one-liners the README
+advertises should stay one-liners:
 
 ```sql
 select id, count(*) from read_json('run.jsonl')
@@ -226,54 +257,67 @@ select id, count(*) from read_json('run.jsonl')
 
 ### `id` is always a string
 
-JSON-RPC permits `id` to be a number, a string, or null. Emitting it with its native type would put
-a type union in a column, and `read_json` over a file where `id` is sometimes `7` and sometimes
-`"7"` either fails or silently coerces. Since JSONL *is* the database here, and the queries are
-written by other people without charpy's code, the column must have one type.
+JSON-RPC permits `id` to be a number, a string, or null. Emitting it with
+its native type would put a type union in a column, and `read_json` over a
+file where `id` is sometimes `7` and sometimes `"7"` either fails or
+silently coerces. Since JSONL *is* the database here, and the queries are
+written by other people without charpy's code, the column must have one
+type.
 
-So `id` carries the **canonical JSON text** of the id — `7` becomes `"7"`, `"abc"` becomes `"abc"` —
-and `id_type` preserves what it actually was. `id_type = "invalid"` covers ids charpy emitted
-deliberately that JSON-RPC does not permit, such as an object or an array.
+So `id` carries the **canonical JSON text** of the id — `7` becomes `"7"`,
+`"abc"` becomes `"abc"` — and `id_type` preserves what it actually was.
+`id_type = "invalid"` covers ids charpy emitted deliberately that JSON-RPC
+does not permit, such as an object or an array.
 
-Note the consequence, and it is intended: `7` and `"7"` collide in the `id` column. That is a real
-protocol ambiguity a subject may itself get wrong, and `id_type` is how a case detects it rather
-than something the schema should paper over.
+Note the consequence, and it is intended: `7` and `"7"` collide in the `id`
+column. That is a real protocol ambiguity a subject may itself get wrong,
+and `id_type` is how a case detects it rather than something the schema
+should paper over.
 
 ### `kind = "malformed"`
 
-A first-class value, meaning **the bytes do not denote exactly one JSON-RPC message**. That covers
-bytes no parser accepts, a frame cut mid-stream, an object with nothing to dispatch on — and an
-object carrying *several* dispatchable members at once, such as a `method` beside a `result`.
-charpy emits every one of those deliberately (`faults-and-cases.md` §2, `schema_violation` with
-`target = "envelope"`), so the transcript must represent them without losing `raw`.
+A first-class value, meaning
+**the bytes do not denote exactly one JSON-RPC message**. That covers bytes
+no parser accepts, a frame cut mid-stream, an object with nothing to
+dispatch on — and an object carrying *several* dispatchable members at
+once, such as a `method` beside a `result`. charpy emits every one of those
+deliberately (`faults-and-cases.md` §2, `schema_violation` with
+`target = "envelope"`), so the transcript must represent them without
+losing `raw`.
 
-The last of those is the one worth stating explicitly, because the alternative is tempting. A
-frame with both a `method` and a `result` could be called a request, on the grounds that
-dispatchers key on the method. That would be charpy asserting a reading of someone else's frame,
-in the column I1, I2 and I3 count — and the whole point of such a frame is that implementations
-*disagree* about it, which is differential-table material rather than something to normalise away.
-So charpy declines: the frame is malformed, it never enters the id-resolution bookkeeping, and
-what the subject made of it is visible in what the subject did next.
+The last of those is the one worth stating explicitly, because the
+alternative is tempting. A frame with both a `method` and a `result` could
+be called a request, on the grounds that dispatchers key on the method.
+That would be charpy asserting a reading of someone else's frame, in the
+column I1, I2 and I3 count — and the whole point of such a frame is that
+implementations *disagree* about it, which is differential-table material
+rather than something to normalise away. So charpy declines: the frame is
+malformed, it never enters the id-resolution bookkeeping, and what the
+subject made of it is visible in what the subject did next.
 
-The result is two accurate findings rather than one wrong pass. The schema layer, reading `raw`,
-issues a MUST citing the subschema that rejected the frame; I1 separately reports that the request
-never received a valid resolution, because it did not. Both are true and neither is noise. The
-alternative — picking a reading so that the id resolves — buys a quieter report by having I1
-certify a frame that was never a response.
+The result is two accurate findings rather than one wrong pass. The schema
+layer, reading `raw`, issues a MUST citing the subschema that rejected the
+frame; I1 separately reports that the request never received a valid
+resolution, because it did not. Both are true and neither is noise. The
+alternative — picking a reading so that the id resolves — buys a quieter
+report by having I1 certify a frame that was never a response.
 
-When `kind` is `malformed`, `id`, `method`, `result_type` and `error_code` are null and `id_type`
-is `absent`; `raw` still holds every byte. A member counts toward "exactly one" when the
-transcript can record it: `method` a non-empty string, `error` an object carrying an integer code,
-`result` any JSON value including `null` — a result may be null, an error must be an object, and
-that asymmetry is JSON-RPC's.
+When `kind` is `malformed`, `id`, `method`, `result_type` and `error_code`
+are null and `id_type` is `absent`; `raw` still holds every byte. A member
+counts toward "exactly one" when the transcript can record it: `method` a
+non-empty string, `error` an object carrying an integer code, `result` any
+JSON value including `null` — a result may be null, an error must be an
+object, and that asymmetry is JSON-RPC's.
 
 ### `raw`
 
-Base64 of the exact bytes as they crossed the wire, before any parsing and after any fault was
-applied. Capped at 64 KiB; beyond that the value is the first 64 KiB and `raw_truncated` is true.
-`raw_len` is always the true length.
+Base64 of the exact bytes as they crossed the wire, before any parsing and
+after any fault was applied. Capped at 64 KiB; beyond that the value is the
+first 64 KiB and `raw_truncated` is true. `raw_len` is always the true
+length.
 
-For a truncated frame, `raw` holds exactly what was sent — the truncation is the datum.
+For a truncated frame, `raw` holds exactly what was sent — the truncation
+is the datum.
 
 ### `http`
 
@@ -288,43 +332,50 @@ Present when `transport = "http"`, otherwise null.
 }
 ```
 
-Header names are lowercased. Values matching the redaction policy are replaced with
-`"<redacted:sha256:4318c2c9…>"` — a stable digest, so the credential-leak invariant can still prove
-that the *same* secret appeared on both faces without the transcript itself becoming a secret. The
-digest is the **whole SHA-256, untruncated**: truncating would trade collision probability for
-transcript size, and charpy has no use for that trade until soak runs make the digest set the
-expensive part (`../open-problems.md`). The digest is also *of* the exact value, whole, so equality
-across faces — and therefore I5 — is **verbatim-only**, and a re-encoded or embedded secret
-produces a different digest (`oracle.md` §4).
-The policy is a list of header *names*, not a heuristic over values: guessing at secrets by shape
-gets it wrong in both directions and makes the file's contents unpredictable, which is bad for
-something people write queries against. `Mcp-Session-Id` is deliberately not on it — the session
-identifier is already carried in the clear in `session` below, and digesting the header while
-printing the field would be incoherent rather than safe. I5 compares session identifiers by value
-instead, which is the stronger comparison of the two (`oracle.md` §4).
+Header names are lowercased. Values matching the redaction policy are
+replaced with `"<redacted:sha256:4318c2c9…>"` — a stable digest, so the
+credential-leak invariant can still prove that the *same* secret appeared
+on both faces without the transcript itself becoming a secret. The digest
+is the **whole SHA-256, untruncated**: truncating would trade collision
+probability for transcript size, and charpy has no use for that trade until
+soak runs make the digest set the expensive part (`../open-problems.md`).
+The digest is also *of* the exact value, whole, so equality across faces —
+and therefore I5 — is **verbatim-only**, and a re-encoded or embedded
+secret produces a different digest (`oracle.md` §4). The policy is a list
+of header *names*, not a heuristic over values: guessing at secrets by
+shape gets it wrong in both directions and makes the file's contents
+unpredictable, which is bad for something people write queries against.
+`Mcp-Session-Id` is deliberately not on it — the session identifier is
+already carried in the clear in `session` below, and digesting the header
+while printing the field would be incoherent rather than safe. I5 compares
+session identifiers by value instead, which is the stronger comparison of
+the two (`oracle.md` §4).
 
-Redaction is on by default; `--no-redact` exists for local debugging and stamps `redaction: "off"`
-into the header line so a report generated from it is visibly unsafe to share.
+Redaction is on by default; `--no-redact` exists for local debugging and
+stamps `redaction: "off"` into the header line so a report generated from
+it is visibly unsafe to share.
 
 ### `session`
 
-Sessioned revisions only (`<= 2025-11-25`); null on 2026-07-28 and later, where the protocol-level
-session was removed by SEP-2567.
+Sessioned revisions only (`<= 2025-11-25`); null on 2026-07-28 and later,
+where the protocol-level session was removed by SEP-2567.
 
 ```jsonc
 "session": { "mcp_session_id": "...", "identity": "tenant-a" }
 ```
 
-`identity` is charpy's label for the credential or tenant it presented, which is what the
-session-isolation invariant partitions on.
+`identity` is charpy's label for the credential or tenant it presented,
+which is what the session-isolation invariant partitions on.
 
 ### `fault`
 
-Null on frames charpy did not tamper with -- and "tamper" means the bytes that crossed differ from
-the bytes that were written. A frame a case matched but delivered untouched and in full, beside what
-the case injected (a duplicate's original, the real answer next to a late one, a whole event before
-a close), carries no attribution: it is the subject's frame, and every layer that judges the subject
-must see it as one. That the case acted, and when, is `fault_applied`'s to record.
+Null on frames charpy did not tamper with -- and "tamper" means the bytes
+that crossed differ from the bytes that were written. A frame a case
+matched but delivered untouched and in full, beside what the case injected
+(a duplicate's original, the real answer next to a late one, a whole event
+before a close), carries no attribution: it is the subject's frame, and
+every layer that judges the subject must see it as one. That the case
+acted, and when, is `fault_applied`'s to record.
 
 ```jsonc
 "fault": {
@@ -336,11 +387,13 @@ must see it as one. That the case acted, and when, is `fault_applied`'s to recor
 }
 ```
 
-`replaced` appears when what crossed no longer carries the id the original did: a rewrite that
-changed or dropped it, or a cut that stopped before it could parse. It names the id and what the
-frame was. A replaced *response* means the subject answered and charpy hid the answer; a replaced
-*request* means the subject was never asked, and is owed nothing under that id. `kind` is absent in
-transcripts written before it was recorded, which replaced only answers.
+`replaced` appears when what crossed no longer carries the id the original
+did: a rewrite that changed or dropped it, or a cut that stopped before it
+could parse. It names the id and what the frame was. A replaced *response*
+means the subject answered and charpy hid the answer; a replaced *request*
+means the subject was never asked, and is owed nothing under that id.
+`kind` is absent in transcripts written before it was recorded, which
+replaced only answers.
 
 ---
 
@@ -370,9 +423,10 @@ transcripts written before it was recorded, which replaced only answers.
 | `clock_advance` | Injected clock jumped | Replay determinism |
 | `note` | Free-text harness annotation | Debugging only; oracle ignores |
 
-`stream_close.detail.reason` distinguishes `peer_close`, `charpy_close`, `timeout`, `error` and
-`subject_close`. The cancellation invariant on 2026-07-28 needs to know *who* closed, and inferring
-it later from a bare close is not possible.
+`stream_close.detail.reason` distinguishes `peer_close`, `charpy_close`,
+`timeout`, `error` and `subject_close`. The cancellation invariant on
+2026-07-28 needs to know *who* closed, and inferring it later from a bare
+close is not possible.
 
 ---
 
@@ -400,47 +454,55 @@ Exactly one, first.
 }
 ```
 
-`policy_digest` makes a transcript self-describing about what produced it. A verdict re-derived
-months later can state which policy was in force without that policy having survived.
+`policy_digest` makes a transcript self-describing about what produced it.
+A verdict re-derived months later can state which policy was in force
+without that policy having survived.
 
-`peer` does the same for the stimulus. `charpy_version` says what judged the run, not what spoke in
-it, and ADR-004 promises a divergence table published today reproduces a year from now — which it
-cannot if the transcript does not record which SDK, at which pin, said the words. It is absent
-under relay, where the traffic is somebody else's and there is no peer to name. `era` is the
-revision charpy *asked* the peer to speak; `revision.negotiated` is what the conversation settled
-on. They differ whenever a subject refuses the ask or a fault rewrites it in flight, which is why
-they are separate columns.
+`peer` does the same for the stimulus. `charpy_version` says what judged
+the run, not what spoke in it, and ADR-004 promises a divergence table
+published today reproduces a year from now — which it cannot if the
+transcript does not record which SDK, at which pin, said the words. It is
+absent under relay, where the traffic is somebody else's and there is no
+peer to name. `era` is the revision charpy *asked* the peer to speak;
+`revision.negotiated` is what the conversation settled on. They differ
+whenever a subject refuses the ask or a fault rewrites it in flight, which
+is why they are separate columns.
 
 ---
 
 ## 8. Guarantees
 
-These are the contract; the oracle and every external consumer may rely on them.
+These are the contract; the oracle and every external consumer may rely on
+them.
 
-1. **Ordering.** File order equals `seq` order. `seq` is dense from 0 with no gaps.
-2. **Completeness of bytes.** Every byte charpy sent or received on a subject-facing connection
-   appears in exactly one `frame.raw`, except beyond the 64 KiB cap where `raw_truncated` marks it.
-3. **Append-only.** Lines are never rewritten. A run that crashes leaves a valid prefix, and a
-   partial transcript is a legitimate oracle input — it simply supports fewer conclusions.
-4. **Dimension totality.** Every frame carries a `face`, a `client_id` and a `session_id`. There is
-   no "unknown" value for any of them. In v0 the latter two are constant; they are never absent.
-5. **No oracle in the run path.** Nothing evaluates an invariant while the run is live. Writes are
-   buffered and asynchronous so the frame path adds microseconds where subjects reason in
-   milliseconds.
-6. **Schema additivity within a major version.** New optional fields may appear in `schema_version:
-   1`. Consumers must ignore unknown fields. Removing or retyping a field requires
-   `schema_version: 2`.
+1. **Ordering.** File order equals `seq` order. `seq` is dense from 0 with
+   no gaps.
+2. **Completeness of bytes.** Every byte charpy sent or received on a
+   subject-facing connection appears in exactly one `frame.raw`, except
+   beyond the 64 KiB cap where `raw_truncated` marks it.
+3. **Append-only.** Lines are never rewritten. A run that crashes leaves a
+   valid prefix, and a partial transcript is a legitimate oracle input — it
+   simply supports fewer conclusions.
+4. **Dimension totality.** Every frame carries a `face`, a `client_id` and
+   a `session_id`. There is no "unknown" value for any of them. In v0 the
+   latter two are constant; they are never absent.
+5. **No oracle in the run path.** Nothing evaluates an invariant while the
+   run is live. Writes are buffered and asynchronous so the frame path adds
+   microseconds where subjects reason in milliseconds.
+6. **Schema additivity within a major version.** New optional fields may
+   appear in `schema_version: 1`. Consumers must ignore unknown fields.
+   Removing or retyping a field requires `schema_version: 2`.
 
 ---
 
 ## 9. Versioning
 
-`schema_version` is on every line, not only the header, so a single line pasted into a bug report
-remains interpretable. The version is an integer and increments only on a breaking change as defined
-in guarantee 6.
+`schema_version` is on every line, not only the header, so a single line
+pasted into a bug report remains interpretable. The version is an integer
+and increments only on a breaking change as defined in guarantee 6.
 
-`charpy replay` accepts any `schema_version` it knows and refuses newer ones with exit code 2 rather
-than guessing.
+`charpy replay` accepts any `schema_version` it knows and refuses newer
+ones with exit code 2 rather than guessing.
 
 ---
 
@@ -471,7 +533,8 @@ select client_id, count(*) filter (where kind = 'request') as sent,
  where type = 'frame' group by client_id order by sent - answered desc;
 ```
 
-`union_by_name = true` is required because the three line types have different shapes; it fills the
-absent columns with nulls. These three are shipped in the README, and the flag is noted there — a
-reader who omits it gets a confusing error, and that is the sort of friction that stops people using
-the format.
+`union_by_name = true` is required because the three line types have
+different shapes; it fills the absent columns with nulls. These three are
+shipped in the README, and the flag is noted there — a reader who omits it
+gets a confusing error, and that is the sort of friction that stops people
+using the format.
