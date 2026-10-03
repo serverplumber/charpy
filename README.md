@@ -242,14 +242,18 @@ seed. See [`docs/design/case-identity.md`](docs/design/case-identity.md).
 ```
 just           # list recipes
 just check     # gofmt, vet, go test -race, and the determinism gate
+just fixture-conformance  # the conformance suite against charpy's fixture gateway
 just build
 just repl      # open a transcript in duckdb, view `t` bound to it
 ```
 
 Go 1.26 and `just` are all a build needs. `just repl` needs
-[DuckDB](https://duckdb.org); the `vendor-*` recipes need `curl`. With Nix,
-`nix-shell` (or direnv, through `.envrc`) provides Go, DuckDB, `curl` and the
-Go tools from `shell.nix`.
+[DuckDB](https://duckdb.org); the `vendor-*` recipes need `curl`;
+`fixture-conformance` needs the
+[MCP conformance suite](https://github.com/modelcontextprotocol/conformance) as
+`conformance` on the path. With Nix, `nix-shell` (or direnv, through `.envrc`)
+provides all of them, and the Go tools, from `shell.nix`; the suite comes from a
+flake, so the `flakes` feature must be enabled.
 
 The reference peer — the always-correct side of every run charpy originates — is
 `github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod`. It is a pre-release

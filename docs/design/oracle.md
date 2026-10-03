@@ -390,6 +390,11 @@ component to test properly because it is a pure function from transcript to verd
   byte-identical output. Enforced in CI.
 - **Fuzzing** the transcript reader with `testing.F`; failing inputs land in `testdata/fuzz/` and
   become permanent regression cases.
-- **The fixture gateway** — a deliberately minimal gateway charpy owns, built to be broken —
-  provides transcripts with known-planted faults and exercises the in-process driver under `-race`.
-  It is a test instrument, not a deliverable, and must not grow into one.
+- **The fixture gateway** (`internal/fixture/gateway`) — a minimal gateway charpy owns, for the
+  gateway driver to be pointed at. It is a control, so it is correct by default: it passes the
+  conformance suite's server requirements in front of a server that does (`just
+  fixture-conformance`), and with nothing planted a run against it must find nothing. Faults are
+  planted behind flags, each one showing only under a fault, so a run against a planted fixture
+  shows the oracle finding exactly that and nothing else; none is planted yet. It will also
+  exercise the in-process driver under `-race`. It is a test instrument, not a deliverable, and
+  must not grow into one.

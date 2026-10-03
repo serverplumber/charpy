@@ -304,6 +304,7 @@ ______________________________________________________________________
 | `driver/stdio`    | shim relay and scripted stdio               | —                            |
 | `driver/proxy`    | HTTP proxy, SSE cuts, liveness probe        | —                            |
 | `driver/hostile`  | client under test, stdio and HTTP           | —                            |
+| `fixture/gateway` | a gateway of charpy's own, to drive against | oracle §7                    |
 | `driver/inproc`   | not built                                   | ADR-002                      |
 | `driver/fleet`    | not built                                   | soak                         |
 | `transcript`      | writer, reader, shared line types           | transcript                   |
@@ -317,8 +318,9 @@ ______________________________________________________________________
 ## 9. Built and designed
 
 **Built.** The five drivers marked built in §4, eight mechanisms, the transcript in both
-directions, oracle layers 1, 2 (I1–I3) and 4 (reaction, expectations, recovery), coverage, three
-report formats, the determinism gate, and `cases` and `policy validate`.
+directions, oracle layers 1, 2 (I1–I3) and 4 (reaction, expectations, recovery), coverage, two
+report formats, the determinism gate, `cases` and `policy validate`, and the fixture gateway the
+gateway driver will be pointed at, conformant and with nothing planted yet.
 
 **Designed and not built.**
 
