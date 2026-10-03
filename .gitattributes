@@ -1,2 +1,4 @@
 spec/ linguist-vendored
+spec/**/*.mdx linguist-documentation
 schema/ linguist-vendored
+schema/**/*.json linguist-vendored
