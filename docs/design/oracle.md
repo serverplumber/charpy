@@ -81,15 +81,18 @@ source is rejected at load, not at review.
 
 `schema.json` per revision, vendored and embedded (`revisions.md` §2).
 Every frame in the transcript is validated against the schema for the
-revision actually negotiated, and a failure cites the `$ref` path that
-rejected it.
+revision actually negotiated on its own face, and a failure cites the
+`$ref` path that rejected it. A frame carries its face's revision; one
+that names none -- the handshake request that settles it -- is held to the
+header's. A gateway may settle different revisions with its clients and
+its servers, and each face is judged by what was agreed on it.
 
 This is free and it is legitimately a MUST, because charpy is not asserting
 a reading — a generated artifact rejected the frame and the report says
 which subschema did it.
 
 ```text
-MUST  frame seq=1043  schema:2025-11-25#/definitions/CallToolResult/properties/content
+MUST  frame seq=1043  schema:2025-11-25#/$defs/CallToolResult/properties/content
       expected array, got string
 ```
 
@@ -99,6 +102,10 @@ Three practical notes:
   cannot be held against the subject. Only frames the subject originated
   are validated.
 - **Validation is offline**, so it costs nothing in the frame path.
+- **Every vendored revision is checkable.** The schemas up to 2025-06-18
+  keep their types under `definitions`, and 2025-11-25 on under `$defs`;
+  the root is read from whichever the revision's schema uses, so a
+  citation names the path as that artifact spells it.
 - **`declared_output_schema` is to extend this layer -- designed, not
   built.** When a server publishes `outputSchema` in `tools/list` and then
   returns `structuredContent` violating it, the rejecting artifact is the

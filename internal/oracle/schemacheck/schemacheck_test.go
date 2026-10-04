@@ -7,6 +7,7 @@ import (
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/oracle/oracletest"
 	"github.com/serverplumber/charpy/internal/oracle/schemacheck"
+	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -190,6 +191,61 @@ func TestOneFindingCitingTheSubschemaThatObjected(t *testing.T) {
 			}
 			if !strings.Contains(f.Detail, tc.says) {
 				t.Errorf("detail = %q, want it to mention %q", f.Detail, tc.says)
+			}
+		})
+	}
+}
+
+// A batch response is valid JSON-RPC in 2025-03-26 and gone from 2025-06-18 on,
+// so the same bytes are fine or a MUST depending on which revision they are
+// held to.
+const batchRes = `[{"jsonrpc":"2.0","id":1,"result":{}}]`
+
+// Each frame is held to the revision its own face negotiated. A gateway can
+// settle 2025-03-26 with a server while the header -- its clients' side --
+// says 2025-11-25, and a frame on that face is judged by what was agreed on
+// it.
+func TestAFrameIsHeldToItsOwnFacesRevision(t *testing.T) {
+	ownFace := check(t, oracletest.New(t, transcript.ClassServer).
+		Revision("2025-03-26").
+		ToSubject(goodReq).FromSubject(batchRes).
+		Done())
+	if len(ownFace.Findings) != 0 {
+		t.Errorf("a batch on a face that negotiated 2025-03-26 was held to the header: %+v", ownFace.Findings)
+	}
+
+	header := check(t, oracletest.New(t, transcript.ClassServer).
+		Revision("").
+		ToSubject(goodReq).FromSubject(batchRes).
+		Done())
+	if len(header.Findings) == 0 || header.Findings[0].Verdict != oracle.Must {
+		t.Errorf("a batch on a frame naming no revision was not held to the header's 2025-11-25: %+v", header.Findings)
+	} else if !strings.HasPrefix(header.Findings[0].Check, "schema:2025-11-25#") {
+		t.Errorf("citation = %q, want the header's revision", header.Findings[0].Check)
+	}
+}
+
+// Every vendored revision's schema must compile and pass a conforming frame.
+// The schemas up to 2025-06-18 keep their types under "definitions", not
+// "$defs", and a root that assumed one made the others uncheckable: Check
+// returned an error for every 2025-06-18 transcript.
+func TestEveryRevisionCanBeChecked(t *testing.T) {
+	for _, r := range revision.All() {
+		t.Run(string(r), func(t *testing.T) {
+			// From 2026-07-28 every result says what kind it is.
+			res := goodRes
+			if r.Stateless() {
+				res = `{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete"}}`
+			}
+			rep, err := schemacheck.Check(oracletest.New(t, transcript.ClassServer).
+				Revision(r).
+				ToSubject(goodReq).FromSubject(res).
+				Done())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rep.Findings) != 0 {
+				t.Errorf("a conforming exchange produced findings: %+v", rep.Findings)
 			}
 		})
 	}

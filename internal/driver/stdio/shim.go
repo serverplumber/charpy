@@ -142,21 +142,19 @@ func New(o Options) (*Shim, error) {
 		o.SessionID = "s-0"
 	}
 
-	core := &exchange.Core{
-		Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases,
-		Face: o.Face, Transport: transcript.TransportStdio,
-		// One face here: a server subject has no second face to join to, so a
-		// forwarded id would be a join to nothing.
-		Link: func() transcript.Link { return transcript.Link{Via: transcript.ViaNone} },
-	}
+	run := &exchange.Run{Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases}
+	// One face here: a server subject has no second face to join to, so a
+	// forwarded id would be a join to nothing.
+	face := run.Face(o.Face, transcript.TransportStdio,
+		func(envelope.Message) transcript.Link { return transcript.Link{Via: transcript.ViaNone} })
 	s := &Shim{
 		o:     o,
-		x:     core.Conn(o.ClientID, o.SessionID, o.ConnID),
+		x:     face.Conn(o.ClientID, o.SessionID, o.ConnID),
 		inter: interpose.New(o.Ledger, o.Sched),
 	}
 	s.match.Store(interpose.NewMatcher(o.Ledger, o.Cases...))
 	if o.Arm != nil {
-		core.Settle = func(r revision.Revision) []interpose.Case {
+		run.Settle = func(r revision.Revision) []interpose.Case {
 			cases := o.Arm(r)
 			s.match.Store(interpose.NewMatcher(o.Ledger, cases...))
 			return cases

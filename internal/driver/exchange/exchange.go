@@ -9,16 +9,22 @@
 // to how each transport puts bytes on the wire and ends a stream, and stay in
 // the drivers.
 //
-// A run has connections. Core holds the run's state -- the ledger, the writer,
-// the armed cases, the once-only header; a Conn binds it to one connection's
-// identity. Single-connection drivers make one Conn and keep it; the HTTP
-// drivers make a Conn per client session, so a client that reconnects is two
-// connections and not one, which the ledger must see to count and correlate
-// correctly.
+// State comes in three widths. A Run is the run: the ledger, the writer, the
+// armed cases, the once-only header. A Face is one side of the subject: which
+// face it is, the transport it speaks, how its frames are correlated, and the
+// follow-up questions put on it. A server or a client under test has one face;
+// a gateway has two, sharing one Run, so its run writes one header and keeps
+// one ledger across both. A Conn binds a Face to one connection's identity.
+// Single-connection drivers make one Conn and keep it; the HTTP drivers make a
+// Conn per client session, so a client that reconnects is two connections and
+// not one, which the ledger must see to count and correlate correctly.
 package exchange
 
 import (
 	"encoding/json"
+	"fmt"
+	"slices"
+	"strings"
 	"sync"
 
 	"github.com/serverplumber/charpy/internal/envelope"
@@ -27,9 +33,9 @@ import (
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
-// Core is a run's ledger- and transcript-facing state, shared across every
-// connection in the run.
-type Core struct {
+// Run is a run's ledger- and transcript-facing state, shared by every face
+// and every connection in the run.
+type Run struct {
 	Ledger     *interpose.Ledger
 	Transcript *transcript.Writer
 	Cases      []interpose.Case
@@ -38,19 +44,42 @@ type Core struct {
 	// records what was armed. It is how a run on --revision auto arms: which
 	// cases apply, and what revision their citations name, are both facts
 	// about the handshake, and nothing before it can know them.
-	Settle    func(revision.Revision) []interpose.Case
-	Face      transcript.Face
-	Transport transcript.Transport
-	// Link is the correlation regime for a recorded frame. The one-faced shim
-	// and hostile driver return ViaNone; the proxy forwards the bytes and
-	// stamps a fresh Forwarded id. Nil is read as ViaNone.
-	Link func() transcript.Link
+	Settle func(revision.Revision) []interpose.Case
+	// Headed is the face whose handshake writes the header, the revision
+	// the run is cited against. Empty means whichever face settles first,
+	// which for a one-faced run is its only face. A gateway run names its
+	// downstream face: what the gateway offers its clients is the revision
+	// its cases are about, and its upstream handshake can finish first.
+	Headed transcript.Face
 
 	mu     sync.Mutex
 	header bool
+	// settled is the revision each face's own handshake negotiated. Every
+	// frame carries its face's, so each face is judged against what was
+	// agreed on it, whatever the header says.
+	settled map[transcript.Face]revision.Revision
+}
 
+// Face is one side of the subject within a run.
+type Face struct {
+	run       *Run
+	face      transcript.Face
+	transport transcript.Transport
+	link      func(envelope.Message) transcript.Link
+
+	mu sync.Mutex
 	// asks holds each connection's follow-up question, by connection id.
+	// Ids are unique within a face, not across faces -- two faces may each
+	// have a "c-0" -- so the questions are the face's, not the run's.
 	asks map[string]*ask
+}
+
+// Face returns the run's view from one side of the subject. link is the
+// correlation regime for a frame recorded on it, given the frame: the
+// one-faced shim and hostile driver return ViaNone; the proxy forwards the
+// bytes and stamps a fresh Forwarded id. Nil is read as ViaNone.
+func (r *Run) Face(face transcript.Face, transport transcript.Transport, link func(envelope.Message) transcript.Link) *Face {
+	return &Face{run: r, face: face, transport: transport, link: link}
 }
 
 // ask is one follow-up question on a connection: armed until the request
@@ -60,21 +89,24 @@ type ask struct {
 	key string
 }
 
-// Conn binds a Core to one connection's identity. Its methods are the
+// Conn binds a Face to one connection's identity. Its methods are the
 // per-frame bookkeeping; the connection id is what the ledger keys on, so two
 // client connections with distinct ids are two exchanges and not a collision.
 type Conn struct {
-	core      *Core
+	face      *Face
 	clientID  string
 	sessionID string
 	connID    string
 }
 
 // Conn returns a handle bound to one connection. Reusing the same ids returns
-// an equivalent handle; the ledger state lives in Core, keyed by the ids.
-func (c *Core) Conn(clientID, sessionID, connID string) *Conn {
-	return &Conn{core: c, clientID: clientID, sessionID: sessionID, connID: connID}
+// an equivalent handle; the ledger state lives in the Run, keyed by face and
+// ids.
+func (f *Face) Conn(clientID, sessionID, connID string) *Conn {
+	return &Conn{face: f, clientID: clientID, sessionID: sessionID, connID: connID}
 }
+
+func (n *Conn) run() *Run { return n.face.run }
 
 // Observe keeps the ledger current and, on the handshake response, settles the
 // negotiated revision.
@@ -85,12 +117,14 @@ func (c *Core) Conn(clientID, sessionID, connID string) *Conn {
 func (n *Conn) Observe(m envelope.Message, dir transcript.Direction) {
 	switch m.Kind {
 	case envelope.KindRequest:
-		n.core.Ledger.Originate(n.core.Face, n.connID, dir,
+		n.run().Ledger.Originate(n.face.face, n.connID, dir,
 			interpose.Exchange{IntentID: m.ID, Method: m.Method, Tool: toolOf(m)})
 	case envelope.KindResponse, envelope.KindError:
-		n.core.Ledger.Resolve(n.core.Face, n.connID, dir.Opposite(), m.ID)
+		n.run().Ledger.Resolve(n.face.face, n.connID, dir.Opposite(), m.ID)
 		if m.Kind == envelope.KindResponse && dir == transcript.S2C {
-			n.core.settleRevision(m)
+			if neg, ok := negotiation(m); ok {
+				n.settle(neg)
+			}
 		}
 	}
 }
@@ -98,7 +132,7 @@ func (n *Conn) Observe(m envelope.Message, dir transcript.Direction) {
 // ToolFor is the tool named by the call an answer travelling dir answers, or
 // "" when it answers something else.
 func (n *Conn) ToolFor(m envelope.Message, dir transcript.Direction) string {
-	tool, _ := n.core.Ledger.ToolFor(n.core.Face, n.connID, dir.Opposite(), m.ID)
+	tool, _ := n.run().Ledger.ToolFor(n.face.face, n.connID, dir.Opposite(), m.ID)
 	return tool
 }
 
@@ -118,69 +152,95 @@ func toolOf(m envelope.Message) string {
 // travelling dir would answer, read before the current frame resolves so
 // already_resolved names an earlier answer and not the one in hand.
 func (n *Conn) PriorResolved(dir transcript.Direction) (envelope.ID, bool) {
-	return n.core.Ledger.LatestResolved(n.core.Face, n.connID, dir.Opposite())
+	return n.run().Ledger.LatestResolved(n.face.face, n.connID, dir.Opposite())
 }
 
-// settleRevision writes the header once the handshake response says what the
-// subject speaks. Two handshakes, because the era boundary replaced one with
-// the other: a sessioned subject answers initialize with the single version it
-// settled on; a 2026-07-28 subject answers server/discover with every version
-// it supports and never sends an initialize.
-func (c *Core) settleRevision(m envelope.Message) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.header {
-		return
-	}
-
+// negotiation reads what a handshake response settled. Two handshakes,
+// because the era boundary replaced one with the other: a sessioned subject
+// answers initialize with the single version it settled on; a 2026-07-28
+// subject answers server/discover with every version it supports and never
+// sends an initialize.
+func negotiation(m envelope.Message) (transcript.Negotiation, bool) {
 	var probe struct {
 		ProtocolVersion   string   `json:"protocolVersion"`
 		SupportedVersions []string `json:"supportedVersions"`
 	}
 	if json.Unmarshal(m.Result, &probe) != nil {
-		return
+		return transcript.Negotiation{}, false
 	}
 
-	var (
-		negotiated revision.Revision
-		offered    []revision.Revision
-		how        transcript.How
-	)
+	var neg transcript.Negotiation
 	switch {
 	case probe.ProtocolVersion != "":
-		negotiated, how = revision.Revision(probe.ProtocolVersion), transcript.HowInitialize
+		neg.Negotiated, neg.How = revision.Revision(probe.ProtocolVersion), transcript.HowInitialize
 	case len(probe.SupportedVersions) > 0:
 		for _, v := range probe.SupportedVersions {
-			r := revision.Revision(v)
-			if !revision.Known(r) {
+			rv := revision.Revision(v)
+			if !revision.Known(rv) {
 				continue
 			}
-			offered = append(offered, r)
-			if revision.Index(r) > revision.Index(negotiated) {
-				negotiated = r
+			neg.Offered = append(neg.Offered, rv)
+			if revision.Index(rv) > revision.Index(neg.Negotiated) {
+				neg.Negotiated = rv
 			}
 		}
-		how = transcript.HowServerDiscover
+		neg.How = transcript.HowServerDiscover
 	default:
-		return
+		return transcript.Negotiation{}, false
 	}
-	if !revision.Known(negotiated) {
-		return
-	}
-
-	c.header = true
-	if c.Settle != nil {
-		c.Cases = c.Settle(negotiated)
-	}
-	_ = c.Transcript.WriteHeader(transcript.Header{
-		Revision: &transcript.Negotiation{Negotiated: negotiated, Offered: offered, How: how},
-		Cases:    c.armed(),
-	})
+	return neg, revision.Known(neg.Negotiated)
 }
 
-func (c *Core) armed() []string {
-	out := make([]string, 0, len(c.Cases))
-	for _, cs := range c.Cases {
+// settle records what this connection's face negotiated, the first time it
+// does, and writes the header if this is the face that heads the run.
+//
+// A face that settles on a different revision from one already settled is
+// noted, not judged. A gateway is free to speak different revisions to its
+// clients and its servers; whether a given pair is a finding is a question
+// for the oracle, once a real gateway shows which pairs occur.
+func (n *Conn) settle(neg transcript.Negotiation) {
+	r, face := n.run(), n.face.face
+	r.mu.Lock()
+	if _, done := r.settled[face]; done {
+		r.mu.Unlock()
+		return
+	}
+	if r.settled == nil {
+		r.settled = map[transcript.Face]revision.Revision{}
+	}
+	r.settled[face] = neg.Negotiated
+	var differs []string
+	for other, rv := range r.settled {
+		if other != face && rv != neg.Negotiated {
+			differs = append(differs, fmt.Sprintf("%s %s", other, rv))
+		}
+	}
+	if !r.header && (r.Headed == "" || r.Headed == face) {
+		r.header = true
+		if r.Settle != nil {
+			r.Cases = r.Settle(neg.Negotiated)
+		}
+		_ = r.Transcript.WriteHeader(transcript.Header{Revision: &neg, Cases: r.armed()})
+	}
+	r.mu.Unlock()
+
+	if len(differs) > 0 {
+		slices.Sort(differs)
+		n.Note(fmt.Sprintf("faces negotiated different revisions: %s %s, %s",
+			face, neg.Negotiated, strings.Join(differs, ", ")))
+	}
+}
+
+// revisionOf is what face negotiated, or "" before its handshake settles.
+func (r *Run) revisionOf(face transcript.Face) revision.Revision {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.settled[face]
+}
+
+func (r *Run) armed() []string {
+	out := make([]string, 0, len(r.Cases))
+	for _, cs := range r.Cases {
 		out = append(out, cs.Citation)
 	}
 	return out
@@ -189,7 +249,7 @@ func (c *Core) armed() []string {
 // FrameOf is the matcher's view of a frame.
 func (n *Conn) FrameOf(m envelope.Message, dir transcript.Direction) interpose.Frame {
 	return interpose.Frame{
-		Face: n.core.Face, Direction: dir, Kind: m.Kind, Method: m.Method, ID: m.ID,
+		Face: n.face.face, Direction: dir, Kind: m.Kind, Method: m.Method, ID: m.ID,
 		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
 	}
 }
@@ -202,73 +262,63 @@ func (n *Conn) Frame(dir transcript.Direction, raw []byte, att *transcript.Fault
 	var method string
 	switch crossed.Kind {
 	case envelope.KindResponse, envelope.KindError:
-		method, _ = n.core.Ledger.MethodFor(n.core.Face, n.connID, dir.Opposite(), crossed.ID)
+		method, _ = n.run().Ledger.MethodFor(n.face.face, n.connID, dir.Opposite(), crossed.ID)
 	}
 
 	link := transcript.Link{Via: transcript.ViaNone}
-	if n.core.Link != nil {
-		link = n.core.Link()
+	if n.face.link != nil {
+		link = n.face.link(crossed)
 	}
 
-	n.core.Transcript.Frame(transcript.Frame{
-		Face: n.core.Face, Direction: dir, Transport: n.core.Transport,
+	n.run().Transcript.Frame(transcript.Frame{
+		Face: n.face.face, Direction: dir, Transport: n.face.transport,
 		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
 		Message: crossed, Method: method, HTTP: http, Link: link, Fault: att,
+		Revision: n.run().revisionOf(n.face.face),
 	})
+}
+
+// event records an event on this connection.
+func (n *Conn) event(e transcript.Event) {
+	e.Face, e.Transport = n.face.face, n.face.transport
+	e.ClientID, e.SessionID, e.ConnID = n.clientID, n.sessionID, n.connID
+	n.run().Transcript.Event(e)
 }
 
 // Event records something that is not a frame but changes what the oracle
 // should conclude.
 func (n *Conn) Event(kind transcript.EventKind, detail map[string]any) {
-	n.core.Transcript.Event(transcript.Event{
-		Kind: kind, Face: n.core.Face, Transport: n.core.Transport,
-		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID, Detail: detail,
-	})
+	n.event(transcript.Event{Kind: kind, Detail: detail})
 }
 
 // FaultEvent records a fault lifecycle event, tagged with the case that caused it.
 func (n *Conn) FaultEvent(kind transcript.EventKind, cs interpose.Case, detail map[string]any) {
-	n.core.Transcript.Event(transcript.Event{
-		Kind: kind, Face: n.core.Face, Transport: n.core.Transport,
-		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
-		Detail: detail, Fault: cs.TranscriptFault(),
-	})
+	n.event(transcript.Event{Kind: kind, Detail: detail, Fault: cs.TranscriptFault()})
 }
 
 // Note records a harness annotation the oracle ignores.
 func (n *Conn) Note(text string) {
-	n.core.Transcript.Event(transcript.Event{
-		Kind: transcript.Note, Face: n.core.Face, Transport: n.core.Transport,
-		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
-		Detail: map[string]any{"harness": text},
-	})
+	n.event(transcript.Event{Kind: transcript.Note, Detail: map[string]any{"harness": text}})
 }
 
 // StreamClose records a stream ending, with who closed it and how many bytes
 // crossed.
 func (n *Conn) StreamClose(reason transcript.CloseReason, bytesWritten int) {
-	n.core.Transcript.Event(transcript.Event{
-		Kind: transcript.StreamClose, Face: n.core.Face, Transport: n.core.Transport,
-		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
-		Detail: transcript.CloseDetail(reason, bytesWritten),
-	})
+	n.event(transcript.Event{Kind: transcript.StreamClose, Detail: transcript.CloseDetail(reason, bytesWritten)})
 }
 
-// Face is the run's subject face, for callers that key ledger state on it.
-func (n *Conn) Face() transcript.Face { return n.core.Face }
+// Face is the face this connection is on, for callers that key ledger state
+// on it.
+func (n *Conn) Face() transcript.Face { return n.face.face }
 
 // Probe records a liveness probe: which method was sent, how it fared, how
 // long it took. The oracle's liveness layer reads these to judge recovery.
 func (n *Conn) Probe(method string, outcome transcript.ProbeOutcome, elapsedNS int64) {
-	n.core.Transcript.Event(transcript.Event{
-		Kind: transcript.Probe, Face: n.core.Face, Transport: n.core.Transport,
-		ClientID: n.clientID, SessionID: n.sessionID, ConnID: n.connID,
-		Detail: map[string]any{
-			"method":          method,
-			"outcome":         string(outcome),
-			"elapsed_mono_ns": elapsedNS,
-		},
-	})
+	n.event(transcript.Event{Kind: transcript.Probe, Detail: map[string]any{
+		"method":          method,
+		"outcome":         string(outcome),
+		"elapsed_mono_ns": elapsedNS,
+	}})
 }
 
 // ConnID is this connection's id, for the ledger calls a driver makes directly.
@@ -287,23 +337,23 @@ func (n *Conn) ConnID() string { return n.connID }
 // the case's own traffic was waiting for. Kept out, the case selects exactly
 // the frames it would have selected with no follow-up at all.
 func (n *Conn) Ask(dir transcript.Direction) (withdraw func()) {
-	c := n.core
-	c.mu.Lock()
-	if c.asks == nil {
-		c.asks = map[string]*ask{}
+	f := n.face
+	f.mu.Lock()
+	if f.asks == nil {
+		f.asks = map[string]*ask{}
 	}
 	a := &ask{dir: dir}
-	c.asks[n.connID] = a
-	c.mu.Unlock()
+	f.asks[n.connID] = a
+	f.mu.Unlock()
 
 	return func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
+		f.mu.Lock()
+		defer f.mu.Unlock()
 		// Only a question that never crossed is withdrawn. One that did stays
 		// exempt until its answer crosses, however late, because a late
 		// answer is exactly the frame the oracle needs to see untouched.
-		if c.asks[n.connID] == a && a.key == "" {
-			delete(c.asks, n.connID)
+		if f.asks[n.connID] == a && a.key == "" {
+			delete(f.asks, n.connID)
 		}
 	}
 }
@@ -313,10 +363,10 @@ func (n *Conn) Ask(dir transcript.Direction) (withdraw func()) {
 // matching, because it is also what notices the question crossing: the id
 // the question went out with is the only way to know its answer.
 func (n *Conn) FollowUp(m envelope.Message, dir transcript.Direction) bool {
-	c := n.core
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	a, ok := c.asks[n.connID]
+	f := n.face
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	a, ok := f.asks[n.connID]
 	if !ok {
 		return false
 	}
@@ -326,7 +376,7 @@ func (n *Conn) FollowUp(m envelope.Message, dir transcript.Direction) bool {
 		return true
 	case a.key != "" && dir != a.dir && (m.Kind == envelope.KindResponse || m.Kind == envelope.KindError) &&
 		m.ID.Key() == a.key:
-		delete(c.asks, n.connID)
+		delete(f.asks, n.connID)
 		return true
 	}
 	return false

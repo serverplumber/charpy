@@ -41,7 +41,8 @@ type Options struct {
 	// fresh Forwarded id -- charpy forwards the bytes, so it stamps its own.
 	// The hostile HTTP mode passes ViaNone: it forwards to its own reference
 	// server, and the one face under test is the client, with nothing to join.
-	Correlate func() transcript.Link
+	// It is given the frame being recorded.
+	Correlate func(envelope.Message) transcript.Link
 
 	// Applied is called once a fault has acted on a response, with the
 	// session the response belongs to. The hostile HTTP mode uses it to have
@@ -80,7 +81,7 @@ type Options struct {
 // not built for concurrent in-flight requests, which v0 does not produce.
 type Proxy struct {
 	o      Options
-	x      *exchange.Core
+	x      *exchange.Face
 	inter  *interpose.Interposer
 	match  *interpose.Matcher
 	client *http.Client
@@ -129,18 +130,14 @@ func New(o Options) (*Proxy, error) {
 	}
 	correlate := o.Correlate
 	if correlate == nil {
-		correlate = func() transcript.Link { return interpose.Forwarded(interpose.NewJoinID()) }
-	}
-	core := &exchange.Core{
-		Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases,
-		Face: o.Face, Transport: transcript.TransportHTTP,
 		// charpy forwards the bytes itself, so it stamps one authoritative id
 		// on both copies -- not the ViaNone the single-faced shim records.
-		Link: correlate,
+		correlate = func(envelope.Message) transcript.Link { return interpose.Forwarded(interpose.NewJoinID()) }
 	}
+	run := &exchange.Run{Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases}
 	return &Proxy{
 		o:      o,
-		x:      core,
+		x:      run.Face(o.Face, transcript.TransportHTTP, correlate),
 		inter:  interpose.New(o.Ledger, o.Sched),
 		match:  interpose.NewMatcher(o.Ledger, o.Cases...),
 		client: client,

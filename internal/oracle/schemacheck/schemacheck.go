@@ -14,14 +14,31 @@ import (
 
 // The root every JSON-RPC frame is validated against. It is an anyOf across
 // request, notification, result and error, so a frame that matches none of
-// them has failed all four and the causes say how.
-const messageRef = "#/$defs/JSONRPCMessage"
+// them has failed all four and the causes say how. Where it lives depends on
+// the revision: the schemas up to 2025-06-18 keep their types under
+// "definitions", and 2025-11-25 on under "$defs". Assuming either one made
+// every other revision's transcripts impossible to check.
+const message = "JSONRPCMessage"
+
+// root is the pointer to the message type in one revision's schema document.
+func root(doc any) string {
+	if m, ok := doc.(map[string]any); ok {
+		if _, ok := m["$defs"]; ok {
+			return "#/$defs/" + message
+		}
+	}
+	return "#/definitions/" + message
+}
 
 // Layer is what findings from here are tagged with.
 const Layer = "schema"
 
 // Check validates every frame the subject originated against the vendored
-// schema for the revision that was negotiated.
+// schema for the revision that was negotiated -- on the frame's own face, when
+// the frame says. A gateway may settle different revisions with its clients
+// and its servers, and each face is held to what was agreed on it; a frame
+// that names none, such as the handshake request that settles it, is held to
+// the header's.
 //
 // This is the only layer permitted to issue a MUST, and the reason is narrow:
 // charpy is not asserting a reading of the specification. A generated
@@ -56,9 +73,17 @@ func Check(t *transcript.Transcript) (oracle.Report, error) {
 		return rep, nil
 	}
 
-	sch, err := compile(rev)
-	if err != nil {
-		return rep, err
+	schemas := map[revision.Revision]*jsonschema.Schema{}
+	schemaFor := func(r revision.Revision) (*jsonschema.Schema, error) {
+		if sch, ok := schemas[r]; ok {
+			return sch, nil
+		}
+		sch, err := compile(r)
+		if err != nil {
+			return nil, err
+		}
+		schemas[r] = sch
+		return sch, nil
 	}
 
 	class := t.Header.Subject.Class
@@ -74,7 +99,15 @@ func Check(t *transcript.Transcript) (oracle.Report, error) {
 			})
 			continue
 		}
-		for _, finding := range validate(sch, rev, f) {
+		r := rev
+		if revision.Known(f.Revision) {
+			r = f.Revision
+		}
+		sch, err := schemaFor(r)
+		if err != nil {
+			return rep, err
+		}
+		for _, finding := range validate(sch, r, f) {
 			rep.Add(finding)
 		}
 	}
@@ -106,7 +139,7 @@ func compile(r revision.Revision) (*jsonschema.Schema, error) {
 	if err := c.AddResource(url, doc); err != nil {
 		return nil, fmt.Errorf("schemacheck: %s: %w", r, err)
 	}
-	sch, err := c.Compile(url + messageRef)
+	sch, err := c.Compile(url + root(doc))
 	if err != nil {
 		return nil, fmt.Errorf("schemacheck: %s: %w", r, err)
 	}
@@ -139,7 +172,7 @@ func validate(sch *jsonschema.Schema, rev revision.Revision, f *transcript.Frame
 	ve, ok := verr.(*jsonschema.ValidationError)
 	if !ok {
 		return []oracle.Finding{{
-			Verdict: oracle.Must, Layer: Layer, Check: messageRef, Seq: f.Seq,
+			Verdict: oracle.Must, Layer: Layer, Check: "schema:" + rev.String(), Seq: f.Seq,
 			Summary: "frame rejected by the protocol schema", Detail: verr.Error(),
 		}}
 	}

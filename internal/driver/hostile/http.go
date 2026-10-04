@@ -11,6 +11,7 @@ import (
 
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/proxy"
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
@@ -87,7 +88,7 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		// is correct, so only server-to-client is faulted -- the proxy already
 		// faults responses, which is that direction.
 		Face:       transcript.Upstream,
-		Correlate:  func() transcript.Link { return transcript.Link{Via: transcript.ViaNone} },
+		Correlate:  func(envelope.Message) transcript.Link { return transcript.Link{Via: transcript.ViaNone} },
 		Cases:      o.Cases,
 		Transcript: o.Transcript,
 		Sched:      o.Sched,

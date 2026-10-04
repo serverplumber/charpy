@@ -26,13 +26,14 @@ type Builder struct {
 	class transcript.Class
 	face  transcript.Face
 	conn  string
+	rev   revision.Revision
 }
 
 // New starts a transcript for a subject class.
 func New(t *testing.T, class transcript.Class) *Builder {
 	t.Helper()
 
-	b := &Builder{t: t, class: class, conn: "c-1"}
+	b := &Builder{t: t, class: class, conn: "c-1", rev: revision.V20251125}
 	b.face = transcript.Downstream
 	if class == transcript.ClassClient {
 		b.face = transcript.Upstream
@@ -65,6 +66,10 @@ func New(t *testing.T, class transcript.Class) *Builder {
 // Conn switches which connection subsequent frames belong to.
 func (b *Builder) Conn(id string) *Builder { b.conn = id; return b }
 
+// Revision sets the revision subsequent frames say their face negotiated; ""
+// leaves it unsaid, as on a handshake request. The header stays 2025-11-25.
+func (b *Builder) Revision(r revision.Revision) *Builder { b.rev = r; return b }
+
 // Raw writes a frame from exact bytes, which is how a transcript carrying
 // something no encoder would produce gets built.
 func (b *Builder) Raw(dir transcript.Direction, raw string, fault *transcript.Fault) *Builder {
@@ -73,7 +78,7 @@ func (b *Builder) Raw(dir transcript.Direction, raw string, fault *transcript.Fa
 	b.w.Frame(transcript.Frame{
 		Face: b.face, Direction: dir, Transport: transcript.TransportStdio,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
-		Message: m, Revision: revision.V20251125,
+		Message: m, Revision: b.rev,
 		Link:  transcript.Link{Via: transcript.ViaNone},
 		Fault: fault,
 	})
@@ -87,7 +92,7 @@ func (b *Builder) RawHTTP(dir transcript.Direction, raw string, status int) *Bui
 	b.w.Frame(transcript.Frame{
 		Face: b.face, Direction: dir, Transport: transcript.TransportHTTP,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
-		Message: m, Revision: revision.V20251125,
+		Message: m, Revision: b.rev,
 		Link: transcript.Link{Via: transcript.ViaNone},
 		HTTP: &transcript.HTTP{Status: status},
 	})

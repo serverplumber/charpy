@@ -132,18 +132,16 @@ func New(o Options) (*Hostile, error) {
 		return nil, err
 	}
 
-	core := &exchange.Core{
-		Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases,
-		// The client is the subject, faced upstream and attacked by its
-		// server (revisions.md section 4).
-		Face: transcript.Upstream, Transport: transcript.TransportStdio,
-		// One face: no second face to join to, so no correlation to claim.
-		Link: func() transcript.Link { return transcript.Link{Via: transcript.ViaNone} },
-	}
+	run := &exchange.Run{Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases}
+	// The client is the subject, faced upstream and attacked by its server
+	// (revisions.md section 4). One face: no second face to join to, so no
+	// correlation to claim.
+	face := run.Face(transcript.Upstream, transcript.TransportStdio,
+		func(envelope.Message) transcript.Link { return transcript.Link{Via: transcript.ViaNone} })
 
 	return &Hostile{
 		o:      o,
-		x:      core.Conn(o.ClientID, o.SessionID, o.ConnID),
+		x:      face.Conn(o.ClientID, o.SessionID, o.ConnID),
 		inter:  interpose.New(o.Ledger, o.Sched),
 		match:  interpose.NewMatcher(o.Ledger, o.Cases...),
 		server: srv,
