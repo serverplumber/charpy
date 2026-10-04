@@ -39,6 +39,10 @@ type Options struct {
 	Name  string
 	Title string
 
+	// Trace issues the traceparent stamped on each request the peer
+	// originates (ADR-005); see trace.go. Nil stamps nothing.
+	Trace func() string
+
 	// ToolPrefix is prepended to every tool a server peer serves; a client
 	// peer ignores it. A gateway run stands two reference servers behind the
 	// subject, and gives each its own prefix so their tools never share a
@@ -101,10 +105,14 @@ func NewClient(o Options) (*Client, error) {
 	peerReads, charpyWrites := io.Pipe()
 	charpyReads, peerWrites := io.Pipe()
 
+	client := mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, clientOptions())
+	if o.Trace != nil {
+		client.AddSendingMiddleware(stamp(o.Trace))
+	}
 	return &Client{
 		Out:    charpyReads,
 		In:     charpyWrites,
-		client: mcp.NewClient(&mcp.Implementation{Name: name, Title: title}, clientOptions()),
+		client: client,
 		era:    o.Era,
 		t: &mcp.IOTransport{
 			Reader:        peerReads,
@@ -205,7 +213,7 @@ func NewServer(o Options) (*Server, error) {
 	}
 
 	ask := newAsker(o.Era, false)
-	srv := newMCPServer(name, title, o.ToolPrefix, o.Era, ask)
+	srv := newMCPServer(name, title, o.ToolPrefix, o.Era, ask, o.Trace)
 
 	serverReads, charpyWrites := io.Pipe()
 	charpyReads, serverWrites := io.Pipe()
@@ -395,13 +403,16 @@ var errRejected = &jsonrpc.Error{Code: -32005}
 // surface, restricted to one era. Claiming another era is a fault
 // (capability_flip on the initialize result), not a second configuration
 // (docs/design/revisions.md section 4).
-func newMCPServer(name, title, prefix string, era revision.Revision, ask *asker) *mcp.Server {
+func newMCPServer(name, title, prefix string, era revision.Revision, ask *asker, trace func() string) *mcp.Server {
 	opts := &mcp.ServerOptions{InitializedHandler: ask.initialized}
 	if era != "" {
 		opts.SupportedProtocolVersions = []string{string(era)}
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Title: title}, opts)
 	addTools(srv, prefix)
+	if trace != nil {
+		srv.AddSendingMiddleware(stamp(trace))
+	}
 	return srv
 }
 
@@ -550,7 +561,7 @@ func ServerHandler(o Options) (*HTTPServer, error) {
 	ask := newAsker(o.Era, true)
 	return &HTTPServer{
 		handler: mcp.NewStreamableHTTPHandler(
-			func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.ToolPrefix, o.Era, ask) }, nil,
+			func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.ToolPrefix, o.Era, ask, o.Trace) }, nil,
 		),
 		ask: ask,
 	}, nil
@@ -589,6 +600,10 @@ func DialHTTP(ctx context.Context, endpoint string, o Options) (*mcp.ClientSessi
 	t := &mcp.StreamableClientTransport{
 		Endpoint:             endpoint,
 		DisableStandaloneSSE: true,
+	}
+	if o.Trace != nil {
+		client.AddSendingMiddleware(stamp(o.Trace))
+		t.HTTPClient = &http.Client{Transport: traceHeader{http.DefaultTransport}}
 	}
 
 	var opts *mcp.ClientSessionOptions

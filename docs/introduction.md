@@ -198,8 +198,10 @@ ______________________________________________________________________
 - Hostile HTTP sees real reconnects, each as its own connection.
 - The gateway driver spawns the gateway per case, filling charpy's upstream
   URLs in for `{upstream0}`, `{upstream1}`, …; each upstream is its own
-  reference server behind its own proxy, its tools prefixed `uN_`. Nothing
-  is correlated across the gateway until G4 (`open-problems.md`).
+  reference server behind its own proxy, its tools prefixed `uN_`. Its
+  faces are joined: a call the gateway forwards with charpy's trace intact
+  joins as `traced`, one it forwards without as `inferred`, and an answer
+  takes its request's join.
 - inproc is for the leaks and races the wire cannot see (ADR-002); fleet is
   soak mode, v1 (`design/soak.md`).
 
@@ -268,8 +270,8 @@ tried in order of how much they can be trusted:
 | Regime      | Basis                                            | Status                    |
 |-------------|--------------------------------------------------|---------------------------|
 | `forwarded` | charpy relayed the frame and stamped both copies | exercised by the proxy    |
-| `traced`    | W3C trace context in `_meta` (SEP-414, ADR-005)  | not wired yet (G4)        |
-| `inferred`  | a content digest over method and payload         | not wired yet (G4)        |
+| `traced`    | W3C trace context in `_meta` (SEP-414, ADR-005)  | the gateway driver        |
+| `inferred`  | a content digest over method and payload         | the gateway driver        |
 | `none`      | no join                                          | correct for a single face |
 
 No gateway verdict may rest on an `inferred` join. It is SKIPPED instead,
@@ -375,8 +377,7 @@ behind flags.
 
 **Designed and not built.**
 
-- attaching to a gateway already running, and two-face correlation
-  (`traced`, `inferred`)
+- attaching to a gateway already running
 - invariants I4–I13
 - layer 1's check of a result's `structuredContent` against its tool's
   declared `outputSchema`

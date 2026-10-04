@@ -67,7 +67,7 @@ type HTTPServer struct {
 
 // NewHTTP prepares a run. Nothing binds until Run.
 func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
-	ref, err := peer.ServerHandler(peer.Options{Era: o.Era})
+	ref, err := peer.ServerHandler(peer.Options{Era: o.Era, Trace: interpose.TraceFor(o.RunSeed, "", "server")})
 	if err != nil {
 		return nil, err
 	}

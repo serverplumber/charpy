@@ -24,9 +24,12 @@
 // problem: real upstreams do not prefix their tools, and a gateway that
 // rewrites names would see charpy's choice, not its own.
 //
-// No frame is correlated across the gateway yet: both faces record ViaNone
-// until the gateway driver's correlation lands (G4), so no gateway invariant
-// can be judged from these transcripts.
+// Frames are joined across the gateway through the run's ledger: charpy
+// stamps a trace on every request it originates (ADR-005), a request the
+// gateway forwards with the trace intact joins as traced, one it forwards
+// without joins at best as inferred by content, and an answer takes its
+// request's join. No gateway verdict may rest on an inferred join
+// (transcript.md section 4).
 //
 // The script, the follow-up question and the recovery probe repeat what
 // proxy.Script does on purpose: a gateway's questions after a fault are going
@@ -51,7 +54,6 @@ import (
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/exchange"
 	"github.com/serverplumber/charpy/internal/driver/proxy"
-	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/peer"
 	"github.com/serverplumber/charpy/internal/revision"
@@ -103,7 +105,6 @@ type Driver struct {
 	o      Options
 	run    *exchange.Run
 	cases  []interpose.Case
-	none   func(envelope.Message) transcript.Link
 	life   *exchange.Conn
 	down   *proxy.Proxy
 	ups    []*upstream
@@ -112,6 +113,9 @@ type Driver struct {
 	servers []*http.Server
 	served  chan error
 	downURL string
+	// trace stamps charpy's client's requests; each upstream server has a
+	// stream of its own.
+	trace func() string
 }
 
 // upstream is one of charpy's upstreams: a reference server and its proxy.
@@ -164,6 +168,14 @@ func New(o Options) (*Driver, error) {
 	}
 	if o.Stimulus.Tool == "" {
 		o.Stimulus.Tool = DefaultTool
+		// Each call distinct inside values the tool accepts, so a forward
+		// that drops the trace still recalls by content to one call rather
+		// than guessing among identical ones (interposer.md section 6).
+		if o.Stimulus.Arguments == nil {
+			o.Stimulus.ArgumentsFor = func(call int) map[string]any {
+				return map[string]any{"a": call + 1, "b": 0}
+			}
+		}
 	}
 
 	cases := []interpose.Case{o.Case}
@@ -173,15 +185,15 @@ func New(o Options) (*Driver, error) {
 		// upstream handshake can finish first.
 		Headed: transcript.Downstream,
 	}
-	// No correlation across the gateway until G4.
-	none := func(envelope.Message) transcript.Link { return transcript.Link{Via: transcript.ViaNone} }
-
-	d := &Driver{o: o, run: run, none: none, cases: cases}
-	d.life = run.Face(transcript.Downstream, transcript.TransportHTTP, none).Conn("c0", "s-0", "d-c-0")
+	d := &Driver{o: o, run: run, cases: cases, trace: interpose.TraceFor(o.RunSeed, o.Case.ID, "client")}
+	// The gateway's lifecycle events: not frames, so nothing to join.
+	d.life = run.Face(transcript.Downstream, transcript.TransportHTTP, nil).Conn("c0", "s-0", "d-c-0")
 
 	for i := range n {
 		name := "u" + strconv.Itoa(i)
-		ref, err := peer.ServerHandler(peer.Options{Era: o.Era, ToolPrefix: name + "_"})
+		ref, err := peer.ServerHandler(peer.Options{
+			Era: o.Era, ToolPrefix: name + "_", Trace: interpose.TraceFor(o.RunSeed, o.Case.ID, name),
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -195,7 +207,7 @@ func New(o Options) (*Driver, error) {
 	d.down, err = proxy.New(proxy.Options{
 		SubjectURL: o.SubjectURL,
 		Run:        run, Sched: o.Sched, Cases: cases, RunSeed: o.RunSeed,
-		Face: transcript.Downstream, ConnPrefix: "d-", Correlate: none,
+		Face: transcript.Downstream, ConnPrefix: "d-", Join: true,
 		// Owned stimulus, as in proxy.Script: a fault that destroys charpy's
 		// own request is answered by charpy, so the script can go on.
 		AnswerDestroyed: true,
@@ -238,7 +250,7 @@ func (d *Driver) Run(ctx context.Context) error {
 		u.proxy, err = proxy.New(proxy.Options{
 			SubjectURL: refURL,
 			Run:        d.run, Sched: d.o.Sched, Cases: d.cases, RunSeed: d.o.RunSeed,
-			Face: transcript.Upstream, ConnPrefix: u.name + "-", Correlate: d.none,
+			Face: transcript.Upstream, ConnPrefix: u.name + "-", Join: true,
 			// charpy serves here, so it knows the declarations a
 			// schema_violation against the declared output breaks.
 			OutputSchemas: u.schemas,
@@ -284,7 +296,7 @@ func (d *Driver) Run(ctx context.Context) error {
 	expiry := time.AfterFunc(timeout, halt.Expired)
 	defer expiry.Stop()
 
-	sess, err := peer.DialHTTP(sctx, d.downURL, peer.Options{Era: d.o.Era})
+	sess, err := peer.DialHTTP(sctx, d.downURL, peer.Options{Era: d.o.Era, Trace: d.trace})
 	if err != nil {
 		halt.Done()
 		// A gateway that cannot complete a handshake under a fault is the
@@ -409,7 +421,7 @@ func (d *Driver) livenessProbe() {
 
 	method := scenario.ProbeMethod(d.o.Era)
 	start := time.Now()
-	sess, err := peer.DialHTTP(ctx, d.downURL, peer.Options{Era: d.o.Era})
+	sess, err := peer.DialHTTP(ctx, d.downURL, peer.Options{Era: d.o.Era, Trace: d.trace})
 	if err != nil {
 		d.down.RecordProbe(method, scenario.Classify(ctx, err), time.Since(start).Nanoseconds())
 		return

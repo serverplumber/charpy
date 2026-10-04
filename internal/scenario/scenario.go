@@ -56,6 +56,14 @@ type Options struct {
 	// here would perturb subjects for a join nothing reads yet.
 	Arguments map[string]any
 
+	// ArgumentsFor, when Arguments is empty, gives each call its own, by
+	// its place in the script (0, 1, ...). A driver that owns the tool it
+	// calls uses it to make every call distinct inside values the tool
+	// accepts, which is what a content join across a gateway needs
+	// (interposer.md section 6). Drawn from the ordinal, not a seed, so the
+	// script stays deterministic.
+	ArgumentsFor func(call int) map[string]any
+
 	// Repeats overrides the count derived from the case's matcher. Zero
 	// derives it, which is the normal path.
 	Repeats int
@@ -111,7 +119,11 @@ func Basic(m interpose.Match, o Options) (Scenario, error) {
 		}
 
 		for i := range repeats {
-			params := &mcp.CallToolParams{Name: tool, Arguments: o.Arguments}
+			args := o.Arguments
+			if args == nil && o.ArgumentsFor != nil {
+				args = o.ArgumentsFor(i)
+			}
+			params := &mcp.CallToolParams{Name: tool, Arguments: args}
 			if _, err := sess.CallTool(ctx, params); err != nil {
 				// A halt beat the call: report the named reason.
 				if why := Why(ctx); why != nil {

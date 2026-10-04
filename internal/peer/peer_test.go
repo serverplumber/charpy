@@ -2,9 +2,12 @@ package peer_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"slices"
@@ -356,5 +359,80 @@ func TestToolPrefixNamesEveryTool(t *testing.T) {
 	}
 	if string(prefixed["u0_add_numbers"]) != string(base["add_numbers"]) || len(prefixed) != len(base) {
 		t.Errorf("prefixed declarations %v do not match the base ones %v", prefixed, base)
+	}
+}
+
+// Every message charpy's peer originates carries the trace it was given, in
+// _meta and in the traceparent header (ADR-005, ADR-014) -- a ping and
+// notifications/initialized, whose params the SDK leaves nil, included.
+func TestMessagesCarryTheirTrace(t *testing.T) {
+	h, err := peer.ServerHandler(peer.Options{Era: revision.V20251125})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type seen struct{ method, meta, header string }
+	var mu sync.Mutex
+	var got []seen
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var m struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Params struct {
+				Meta struct {
+					Traceparent string `json:"traceparent"`
+				} `json:"_meta"`
+			} `json:"params"`
+		}
+		if json.Unmarshal(body, &m) == nil && m.Method != "" {
+			mu.Lock()
+			got = append(got, seen{m.Method, m.Params.Meta.Traceparent, r.Header.Get("Traceparent")})
+			mu.Unlock()
+		}
+		h.ServeHTTP(w, r)
+	}))
+	defer ts.Close()
+
+	n := 0
+	trace := func() string {
+		n++
+		return fmt.Sprintf("00-%032x-%016x-01", n, n)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sess, err := peer.DialHTTP(ctx, ts.URL, peer.Options{Era: revision.V20251125, Trace: trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.Ping(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sess.ListTools(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	_ = sess.Close()
+
+	mu.Lock()
+	defer mu.Unlock()
+	methods := map[string]bool{}
+	traces := map[string]bool{}
+	for _, s := range got {
+		methods[s.method] = true
+		if s.meta == "" {
+			t.Errorf("%s carries no traceparent in _meta", s.method)
+		}
+		if s.header != s.meta {
+			t.Errorf("%s: header %q, _meta %q", s.method, s.header, s.meta)
+		}
+		if traces[s.meta] {
+			t.Errorf("%s reuses trace %s", s.method, s.meta)
+		}
+		traces[s.meta] = true
+	}
+	for _, m := range []string{"initialize", "notifications/initialized", "ping", "tools/list"} {
+		if !methods[m] {
+			t.Errorf("saw no %s; saw %v", m, got)
+		}
 	}
 }

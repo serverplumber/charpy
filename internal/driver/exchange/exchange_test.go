@@ -2,6 +2,7 @@ package exchange_test
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,5 +145,136 @@ func TestFollowUpsOnTwoFacesDoNotCollide(t *testing.T) {
 	}
 	if !down.FollowUp(ping, transcript.C2S) {
 		t.Error("the downstream face did not recognise its own follow-up question")
+	}
+}
+
+// joinedRun is a gateway run whose two faces join, and a func that closes it
+// and returns each frame's link in order.
+func joinedRun(t *testing.T) (down, up *exchange.Conn, finish func() []transcript.LinkLine) {
+	t.Helper()
+	var buf bytes.Buffer
+	sched := clock.NewInjected()
+	w, err := transcript.New(&buf, transcript.Options{
+		Run: transcript.Run{
+			CharpyVersion: "test", Seed: "8f2c1a", Mode: transcript.ModeProxy,
+			Subject: transcript.Subject{Class: transcript.ClassGateway}, Clock: clock.ModeInjected,
+		},
+		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &exchange.Run{Ledger: interpose.NewLedger(sched), Transcript: w, Headed: transcript.Downstream}
+	down = run.JoinedFace(transcript.Downstream, transcript.TransportHTTP).Conn("c0", "s-0", "d-c-1")
+	up = run.JoinedFace(transcript.Upstream, transcript.TransportHTTP).Conn("c0", "s-0", "u0-c-1")
+	return down, up, func() []transcript.LinkLine {
+		t.Helper()
+		_ = w.Close() // no handshake here, so no header: the reader is what matters
+		tr, err := transcript.Read(&buf)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []transcript.LinkLine
+		for _, f := range tr.Frames() {
+			out = append(out, f.Link)
+		}
+		return out
+	}
+}
+
+// cross records one frame the way a driver does: observe, then record.
+func cross(t *testing.T, n *exchange.Conn, dir transcript.Direction, raw string) {
+	t.Helper()
+	n.Observe(msg(t, raw), dir)
+	n.Frame(dir, []byte(raw), nil, nil)
+}
+
+func call(id int, meta, a string) string {
+	params := `"name":"u0_add_numbers","arguments":{"a":` + a + `,"b":0}`
+	if meta != "" {
+		params = `"_meta":{"traceparent":"` + meta + `"},` + params
+	}
+	return `{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"method":"tools/call","params":{` + params + `}}`
+}
+
+func answer(id int) string {
+	return `{"jsonrpc":"2.0","id":` + strconv.Itoa(id) + `,"result":{"content":[]}}`
+}
+
+const (
+	trace1 = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"
+	trace2 = "00-1af7651916cd43dd8448eb211c80319c-c7ad6b7169203331-01"
+)
+
+// A call charpy makes and the gateway forwards joins across the gateway:
+// traced when the trace survives, inferred by content when it does not, and
+// each answer by its own request. What matches nothing joins nothing.
+func TestJoinedFacesCorrelateAcrossTheGateway(t *testing.T) {
+	down, up, finish := joinedRun(t)
+
+	cross(t, down, transcript.C2S, call(1, trace1, "1")) // 0: charpy's call
+	cross(t, up, transcript.C2S, call(7, trace1, "1"))   // 1: forwarded, trace kept
+	cross(t, up, transcript.S2C, answer(7))              // 2: charpy's upstream answers
+	cross(t, down, transcript.S2C, answer(1))            // 3: the gateway answers charpy
+	cross(t, down, transcript.C2S, call(2, trace2, "2")) // 4: charpy's second call
+	cross(t, up, transcript.C2S, call(8, "", "2"))       // 5: forwarded, trace dropped
+	cross(t, up, transcript.C2S, call(9, "", "99"))      // 6: nothing charpy sent
+	links := finish()
+	if len(links) != 7 {
+		t.Fatalf("%d frames, want 7", len(links))
+	}
+
+	id := func(i int) string {
+		if links[i].CharpyID == nil {
+			return ""
+		}
+		return *links[i].CharpyID
+	}
+	for _, c := range []struct {
+		frame int
+		via   transcript.Via
+		same  int // the frame whose charpy_id this one must share; -1 for none
+	}{
+		{0, transcript.ViaTraced, -1},
+		{1, transcript.ViaTraced, 0},
+		{2, transcript.ViaTraced, 0},
+		{3, transcript.ViaTraced, 0},
+		{4, transcript.ViaTraced, -1},
+		{5, transcript.ViaInferred, 4},
+		{6, transcript.ViaNone, -1},
+	} {
+		if got := links[c.frame].Via; got != c.via {
+			t.Errorf("frame %d joined via %s, want %s", c.frame, got, c.via)
+		}
+		if c.same >= 0 && (id(c.frame) == "" || id(c.frame) != id(c.same)) {
+			t.Errorf("frame %d has charpy_id %q, want frame %d's %q", c.frame, id(c.frame), c.same, id(c.same))
+		}
+	}
+	if id(0) == id(4) {
+		t.Error("two calls share one join")
+	}
+	if links[5].Confidence >= 1 || links[5].Confidence <= 0 {
+		t.Errorf("the inferred join's confidence = %v, want between 0 and 1", links[5].Confidence)
+	}
+}
+
+// charpy's notifications carry a trace like its requests (ADR-014), so on
+// the downstream face they keep their join key; and a gateway's own
+// notifications/initialized upstream -- not forwarded, the same contentless
+// bytes as charpy's -- joins nothing, rather than charpy's by content.
+func TestCharpysNotificationsKeepTheirJoin(t *testing.T) {
+	down, up, finish := joinedRun(t)
+	cross(t, down, transcript.C2S, `{"jsonrpc":"2.0","method":"notifications/initialized","params":{"_meta":{"traceparent":"`+trace1+`"}}}`)
+	cross(t, up, transcript.C2S, `{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}`)
+	links := finish()
+	if len(links) != 2 {
+		t.Fatalf("%d frames, want 2", len(links))
+	}
+	if links[0].Via != transcript.ViaTraced || links[0].CharpyID == nil {
+		t.Errorf("charpy's notification joined %+v, want traced with an id", links[0])
+	}
+	if links[1].Via != transcript.ViaNone {
+		t.Errorf("the gateway's own initialized joined %+v, want none", links[1])
 	}
 }

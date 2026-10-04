@@ -50,6 +50,8 @@ type Script struct {
 	run   scenario.Scenario
 	srv   *http.Server
 	ln    net.Listener
+	// trace stamps charpy's requests, the probe's included (ADR-005).
+	trace func() string
 }
 
 // NewScript prepares a run. Nothing binds or connects until Run.
@@ -77,7 +79,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 		}
 	}
 
-	return &Script{o: o, proxy: pr, run: run}, nil
+	return &Script{o: o, proxy: pr, run: run, trace: interpose.TraceFor(o.RunSeed, o.Case.ID, "client")}, nil
 }
 
 // Endpoint is the URL the peer connects to, valid once Run has bound the
@@ -113,7 +115,7 @@ func (s *Script) Run(ctx context.Context) error {
 	expiry := time.AfterFunc(timeout, halt.Expired)
 	defer expiry.Stop()
 
-	sess, err := peer.DialHTTP(sctx, s.Endpoint(), peer.Options{Era: s.o.Era})
+	sess, err := peer.DialHTTP(sctx, s.Endpoint(), peer.Options{Era: s.o.Era, Trace: s.trace})
 	if err != nil {
 		s.shutdown()
 		<-served
@@ -170,7 +172,7 @@ func (s *Script) livenessProbe() {
 	method := scenario.ProbeMethod(s.o.Era)
 	start := time.Now()
 
-	sess, err := peer.DialHTTP(ctx, s.Endpoint(), peer.Options{Era: s.o.Era})
+	sess, err := peer.DialHTTP(ctx, s.Endpoint(), peer.Options{Era: s.o.Era, Trace: s.trace})
 	if err != nil {
 		s.proxy.RecordProbe(method, scenario.Classify(ctx, err), time.Since(start).Nanoseconds())
 		return

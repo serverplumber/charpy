@@ -127,7 +127,9 @@ func New(o Options) (*Hostile, error) {
 		o.SessionID = "s-0"
 	}
 
-	srv, err := peer.NewServer(peer.Options{Era: o.Era})
+	// A relay arms every applicable case, so the stream is the run's, not
+	// one case's.
+	srv, err := peer.NewServer(peer.Options{Era: o.Era, Trace: interpose.TraceFor(o.RunSeed, "", "server")})
 	if err != nil {
 		return nil, err
 	}

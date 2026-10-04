@@ -464,28 +464,3 @@ has to handle.
 
 **Trigger to revisit.** The first case that needs two upstreams to declare
 the same name, or a gateway that rewrites tool names.
-
----
-
-## Nothing is correlated across a gateway yet
-
-**Gap.** Both faces of a gateway run record `link.via = "none"`. The
-transcript holds what crossed each face, but nothing joins a downstream
-request to the upstream request the gateway forwarded for it, so no
-invariant that needs the join (I5's attribution, I6, I7's routing window)
-can be judged from a gateway transcript.
-
-**Why it exists.** The gateway driver came before correlation by design:
-G3 stands charpy on both sides, G4 joins them. The proxy's default
-`forwarded` link would have been a lie here -- charpy relays only its own
-hops, and it is the gateway that forwards across.
-
-**Why it is not closed for v0.** It is the next item (G4): wire the
-ledger's `Originated`/`LinkFor`, stamp `traceparent` on what charpy
-originates, and let a response inherit its request's join.
-
-**What closing it would take.** G4, as above. A gateway that drops
-`traceparent` will still join only by `inferred` content, and no gateway
-verdict may rest on an inferred join.
-
-**Trigger to revisit.** G4.

@@ -22,6 +22,11 @@ const (
 	IDs = "ids"
 	// Jitter is scheduling wobble within a case.
 	Jitter = "jitter"
+	// Trace is the trace context charpy stamps on what it originates
+	// (ADR-005). Drawn rather than random, so a citation reproduces charpy's
+	// requests byte for byte, _meta included. Each peer in a run draws its
+	// own stream, as Trace + "/" + the peer's name.
+	Trace = "trace"
 )
 
 // For returns the stream a case draws on for one purpose.

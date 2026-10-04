@@ -200,10 +200,14 @@ is charpy's own identifier, distinguished from the W3C `trace_id`/`span_id`
 beside it, which belong to whoever started the trace.
 
 charpy stamps `traceparent`, and propagates `tracestate` and `baggage`,
-into `_meta` on every request it originates, on both transports. On HTTP it
+into `_meta` on every request and notification it originates (ADR-005,
+ADR-014), on both transports. On HTTP it
 additionally sets the `traceparent` header. Per SEP-414 these three keys
 are an explicit exception to the reverse-DNS prefix rule and need no
-namespace.
+namespace. The ids are drawn from the run seed (`seed.Trace`), one stream
+per peer, not at random: a citation reproduces charpy's requests byte for
+byte, `_meta` included. An answer is not matched across at all; it takes
+the join of the request it answers, found by id on its own face.
 
 The `inferred` regime plants **no marker in the traffic**. An earlier draft
 had charpy add a `dev.charpy/` key inside tool arguments so a forwarded

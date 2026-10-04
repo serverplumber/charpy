@@ -66,6 +66,9 @@ type Face struct {
 	face      transcript.Face
 	transport transcript.Transport
 	link      func(envelope.Message) transcript.Link
+	// join is set on a face of a gateway, whose frames are correlated with
+	// the other face's (see Conn.join).
+	join bool
 
 	mu sync.Mutex
 	// asks holds each connection's follow-up question, by connection id.
@@ -80,6 +83,13 @@ type Face struct {
 // bytes and stamps a fresh Forwarded id. Nil is read as ViaNone.
 func (r *Run) Face(face transcript.Face, transport transcript.Transport, link func(envelope.Message) transcript.Link) *Face {
 	return &Face{run: r, face: face, transport: transport, link: link}
+}
+
+// JoinedFace is one side of a gateway: its frames are joined with what
+// crossed the gateway's other side, through the run's ledger
+// (transcript.md section 4, interposer.md section 6).
+func (r *Run) JoinedFace(face transcript.Face, transport transcript.Transport) *Face {
+	return &Face{run: r, face: face, transport: transport, join: true}
 }
 
 // ask is one follow-up question on a connection: armed until the request
@@ -266,7 +276,10 @@ func (n *Conn) Frame(dir transcript.Direction, raw []byte, att *transcript.Fault
 	}
 
 	link := transcript.Link{Via: transcript.ViaNone}
-	if n.face.link != nil {
+	switch {
+	case n.face.join:
+		link = n.join(crossed, dir)
+	case n.face.link != nil:
 		link = n.face.link(crossed)
 	}
 
@@ -276,6 +289,41 @@ func (n *Conn) Frame(dir transcript.Direction, raw []byte, att *transcript.Fault
 		Message: crossed, Method: method, HTTP: http, Link: link, Fault: att,
 		Revision: n.run().revisionOf(n.face.face),
 	})
+}
+
+// join correlates a frame on a gateway's face with the other face.
+//
+// Which frames are charpy's follows from the face: charpy is the client on
+// the downstream face and the servers on the upstream one. What charpy sent
+// is registered, by the trace it stamped and by content; what the gateway
+// sent is recalled against that, trace first, content second, and is no join
+// at all when neither matches. An answer is joined by the request it
+// answers, found by id on its own face -- a fact, not a match -- so only
+// requests and notifications are ever matched across.
+func (n *Conn) join(m envelope.Message, dir transcript.Direction) transcript.Link {
+	ledger, face := n.run().Ledger, n.face.face
+	charpys := transcript.C2S
+	if face == transcript.Upstream {
+		charpys = transcript.S2C
+	}
+	switch m.Kind {
+	case envelope.KindRequest, envelope.KindNotification:
+		var link transcript.Link
+		if dir == charpys {
+			link, _ = ledger.Originated(interpose.NewJoinID(), m, transcript.ViaTraced)
+		} else {
+			link = ledger.LinkFor(m)
+		}
+		if m.Kind == envelope.KindRequest {
+			ledger.SetLink(face, n.connID, dir, m.ID, link)
+		}
+		return link
+	case envelope.KindResponse, envelope.KindError:
+		if link, ok := ledger.LinkOf(face, n.connID, dir.Opposite(), m.ID); ok {
+			return link
+		}
+	}
+	return transcript.Link{Via: transcript.ViaNone}
 }
 
 // event records an event on this connection.

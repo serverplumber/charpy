@@ -73,6 +73,9 @@ type Options struct {
 	// Ledger, Transcript and Cases. When set, the run's ledger and writer are
 	// the proxy's, and Ledger and Transcript must be nil or the same ones.
 	Run *exchange.Run
+	// Join correlates the proxy's frames with the other face of a gateway,
+	// through the shared Run's ledger, in place of Correlate.
+	Join bool
 	// ConnPrefix is prepended to the connection ids the proxy names. Ids are
 	// unique within one proxy; a run with two proxies on one face -- a
 	// gateway's two upstreams -- needs them unique across both, or the
@@ -165,11 +168,18 @@ func New(o Options) (*Proxy, error) {
 	}
 	return &Proxy{
 		o:      o,
-		x:      run.Face(o.Face, transcript.TransportHTTP, correlate),
+		x:      face(run, o, correlate),
 		inter:  interpose.New(o.Ledger, o.Sched),
 		match:  interpose.NewMatcher(o.Ledger, o.Cases...),
 		client: client,
 	}, nil
+}
+
+func face(run *exchange.Run, o Options, correlate func(envelope.Message) transcript.Link) *exchange.Face {
+	if o.Join {
+		return run.JoinedFace(o.Face, transcript.TransportHTTP)
+	}
+	return run.Face(o.Face, transcript.TransportHTTP, correlate)
 }
 
 // RecordProbe records a liveness probe's outcome. The probe itself is an

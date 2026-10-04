@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	mrand "math/rand/v2"
 	"strings"
+	"sync"
 
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/envelope"
+	"github.com/serverplumber/charpy/internal/seed"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -76,6 +80,51 @@ type TraceContext struct {
 	Flags      string
 	TraceState string
 	Baggage    string
+}
+
+// Tracer issues the trace context charpy stamps on what one of its peers
+// originates (ADR-005), drawn from a seeded stream (seed.Trace) so the ids
+// reproduce with the citation. Safe for concurrent use; ids are issued in
+// the order asked for, which for a scripted peer is the script's.
+type Tracer struct {
+	mu sync.Mutex
+	r  *mrand.Rand
+}
+
+// NewTracer draws trace contexts from r.
+func NewTracer(r *mrand.Rand) *Tracer { return &Tracer{r: r} }
+
+// TraceFor is the traceparent source for one of charpy's peers in a run:
+// who names the peer, so each draws a stream of its own and adding a peer
+// leaves the others' ids where they were.
+func TraceFor(runSeed, caseID, who string) func() string {
+	return NewTracer(seed.For(runSeed, caseID, seed.Trace+"/"+who)).Traceparent
+}
+
+// Traceparent is the next trace context, rendered for _meta and the header.
+// Every request gets a trace of its own: a gateway that forwards it carries
+// the trace across, and that is the join.
+func (t *Tracer) Traceparent() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var trace, span [16]byte
+	for !nonzero(trace[:]) {
+		binary.BigEndian.PutUint64(trace[:8], t.r.Uint64())
+		binary.BigEndian.PutUint64(trace[8:], t.r.Uint64())
+	}
+	for !nonzero(span[:8]) {
+		binary.BigEndian.PutUint64(span[:8], t.r.Uint64())
+	}
+	return TraceContext{TraceID: hex.EncodeToString(trace[:]), SpanID: hex.EncodeToString(span[:8])}.FormatTraceparent()
+}
+
+func nonzero(b []byte) bool {
+	for _, c := range b {
+		if c != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // FormatTraceparent renders a traceparent header value.
@@ -152,14 +201,19 @@ func TraceOf(m envelope.Message) (TraceContext, bool) {
 // which is safe. A join that should not have been made is not.
 //
 // A frame with no payload to digest returns the empty string and cannot be
-// content-joined at all.
+// content-joined at all -- and so does one whose payload is empty once _meta
+// is set aside. notifications/initialized, a bare ping, an unparameterised
+// listing: every session sends the same bytes, so a match says nothing about
+// which message it was, and joining on one is exactly the confident wrong
+// answer the credibility rule forbids. A gateway's own initialized was
+// joined to charpy's that way before this rule.
 func ContentDigest(m envelope.Message) string {
 	payload := payloadOf(m)
 	if len(payload) == 0 {
 		return ""
 	}
 	canon, ok := canonical(payload)
-	if !ok {
+	if !ok || string(canon) == "{}" || string(canon) == "null" {
 		return ""
 	}
 	sum := sha256.Sum256([]byte(m.Method + "\x00" + string(canon)))
@@ -245,6 +299,15 @@ func (l *Ledger) Originated(joinID string, m envelope.Message, via transcript.Vi
 	if tc, ok := TraceOf(m); ok {
 		l.byTrace.Put(tc.TraceID, joinID)
 		link.TraceID, link.SpanID = tc.TraceID, tc.SpanID
+	} else if via == transcript.ViaTraced {
+		// A frame charpy sent without a trace -- one a fault synthesized,
+		// say -- joins nothing. Recording it as traced would claim an
+		// authority it does not carry; and recording it as none while still
+		// offering its content for recall would give the other face's copy
+		// a charpy_id that no frame on this face carries -- a key that joins
+		// nothing. So it is not offered at all: what is lost is an inferred
+		// join, which no verdict may rest on.
+		return transcript.Link{Via: transcript.ViaNone}, nil
 	}
 	if d := ContentDigest(m); d != "" {
 		entries, ok := l.byDigest.Get(d)

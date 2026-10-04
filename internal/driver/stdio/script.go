@@ -87,7 +87,7 @@ func NewScript(o ScriptOptions) (*Script, error) {
 		return nil, fmt.Errorf("stdio: case %s names no fault mechanism", o.Case.ID)
 	}
 
-	p, err := peer.NewClient(peer.Options{Era: o.Era})
+	p, err := peer.NewClient(peer.Options{Era: o.Era, Trace: interpose.TraceFor(o.RunSeed, o.Case.ID, "client")})
 	if err != nil {
 		return nil, err
 	}

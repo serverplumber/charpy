@@ -113,6 +113,10 @@ type Exchange struct {
 	// whose declaration it is breaking.
 	Tool string
 	At   clock.Mono
+	// Link is the request's join across a gateway, once recorded. Its answer
+	// is joined by the same key: an answer is found by id on its own face,
+	// which is a fact, so it needs no correlation of its own.
+	Link transcript.Link
 }
 
 // LedgerOption configures a Ledger.
@@ -226,6 +230,34 @@ func (l *Ledger) MethodFor(face transcript.Face, conn string, origin transcript.
 		return e.Method, true
 	}
 	return "", false
+}
+
+// SetLink records the join a request was given when it crossed.
+func (l *Ledger) SetLink(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID, link transcript.Link) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sp := l.spaceLocked(face, conn, origin)
+	key := wire.Key()
+	if e, ok := sp.inflight[key]; ok {
+		e.Link = link
+		sp.inflight[key] = e
+	}
+}
+
+// LinkOf is the join of the request an answer's id resolves to, the way
+// MethodFor reports its method.
+func (l *Ledger) LinkOf(face transcript.Face, conn string, origin transcript.Direction, wire envelope.ID) (transcript.Link, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	sp := l.spaceLocked(face, conn, origin)
+	key := wire.Key()
+	if e, ok := sp.inflight[key]; ok {
+		return e.Link, e.Link.Via != ""
+	}
+	if e, ok := sp.resolved.Get(key); ok {
+		return e.Link, e.Link.Via != ""
+	}
+	return transcript.Link{}, false
 }
 
 // ToolFor reports the tool a tools/call answer's id resolves to, the way

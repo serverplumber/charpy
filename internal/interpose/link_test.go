@@ -224,3 +224,88 @@ func TestJoinTableIsAWindow(t *testing.T) {
 		t.Errorf("the newest originated frame was evicted: via = %q", got.Via)
 	}
 }
+
+// Trace ids are drawn from the run seed, so a citation reproduces charpy's
+// requests byte for byte; each peer draws its own stream.
+func TestTraceForIsDeterministicPerPeer(t *testing.T) {
+	draw := func(who string) []string {
+		next := interpose.TraceFor("8f2c1a", "stream/truncate-mid-event", who)
+		return []string{next(), next(), next()}
+	}
+	a, again, other := draw("client"), draw("client"), draw("u0")
+	for i := range a {
+		if a[i] != again[i] {
+			t.Errorf("draw %d differs between two runs on the same seed: %s, %s", i, a[i], again[i])
+		}
+		if a[i] == other[i] {
+			t.Errorf("draw %d is the same for two peers: %s", i, a[i])
+		}
+		if _, ok := interpose.ParseTraceparent(a[i]); !ok {
+			t.Errorf("draw %d is not a traceparent: %s", i, a[i])
+		}
+	}
+	if a[0] == a[1] {
+		t.Error("two requests drew the same trace")
+	}
+}
+
+// A frame charpy sent without a trace joins nothing, on either face. Traced
+// would claim an authority it does not carry; and a content recall on the
+// other face would hand that copy a charpy_id no frame on this face carries,
+// a key a join on link.charpy_id can never reach.
+func TestAnUntracedOriginJoinsNothing(t *testing.T) {
+	l := interpose.NewLedger(clock.NewInjected())
+	link, err := l.Originated("aaaaaa", plain(t, "tools/call", `"name":"echo"`), transcript.ViaTraced)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Via != transcript.ViaNone || link.CharpyID != "" {
+		t.Errorf("link = %+v, want none", link)
+	}
+	if far := l.LinkFor(plain(t, "tools/call", `"name":"echo"`)); far.Via != transcript.ViaNone || far.CharpyID != "" {
+		t.Errorf("the other face's copy = %+v, want none: its id would have no other half", far)
+	}
+}
+
+// An answer is joined by the request it answers, in flight or resolved.
+func TestAnAnswerFindsItsRequestsJoin(t *testing.T) {
+	l := interpose.NewLedger(clock.NewInjected())
+	id := envelope.NumberID(3)
+	l.Originate(transcript.Upstream, "u0-c-1", transcript.C2S, interpose.Exchange{IntentID: id, Method: "tools/call"})
+	want := transcript.Link{CharpyID: "bbbbbb", Via: transcript.ViaTraced}
+	l.SetLink(transcript.Upstream, "u0-c-1", transcript.C2S, id, want)
+
+	if got, ok := l.LinkOf(transcript.Upstream, "u0-c-1", transcript.C2S, id); !ok || got != want {
+		t.Errorf("in flight: %+v, %v", got, ok)
+	}
+	l.Resolve(transcript.Upstream, "u0-c-1", transcript.C2S, id)
+	if got, ok := l.LinkOf(transcript.Upstream, "u0-c-1", transcript.C2S, id); !ok || got != want {
+		t.Errorf("resolved: %+v, %v", got, ok)
+	}
+	if _, ok := l.LinkOf(transcript.Upstream, "u1-c-1", transcript.C2S, id); ok {
+		t.Error("another connection's request 3 found this one's join")
+	}
+}
+
+// A message with no content of its own -- none at all, or only _meta -- has
+// no digest: every session sends the same bytes, so a content match would
+// join a gateway's own notifications/initialized to charpy's.
+func TestContentlessMessagesHaveNoDigest(t *testing.T) {
+	for _, params := range []string{`{}`, `{"_meta":{"traceparent":"00-` + traceID + `-00f067aa0ba902b7-01"}}`, `null`} {
+		m, err := envelope.NewNotification("notifications/initialized", json.RawMessage(params))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d := interpose.ContentDigest(m); d != "" {
+			t.Errorf("params %s: digest %s, want none", params, d)
+		}
+	}
+	l := interpose.NewLedger(clock.NewInjected())
+	ours, _ := envelope.NewNotification("notifications/initialized", json.RawMessage(`{}`))
+	if _, err := l.Originated("cccccc", ours, transcript.ViaTraced); err != nil {
+		t.Fatal(err)
+	}
+	if far := l.LinkFor(ours); far.Via != transcript.ViaNone {
+		t.Errorf("a contentless message joined %+v, want none", far)
+	}
+}

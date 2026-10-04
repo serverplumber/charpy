@@ -615,3 +615,41 @@ closes at its source.
 peer on purpose -- a fault whose point is what charpy's peer then sends the
 subject. That is a consequence, which job 4 already attributes; it would be
 a new kind of case rather than an exception to part 1.
+
+---
+
+## ADR-014 — charpy stamps its notifications as well as its requests
+
+**Question.** ADR-005 has charpy stamp `traceparent` on every request it
+originates. What about its notifications?
+
+**Decision.** Stamp them too. Every message charpy's peers originate
+carries a trace in `_meta`, and over HTTP in the header; where the SDK
+leaves a message's params nil, the peer supplies the empty params type
+for that method so there is somewhere to put it.
+
+**Why.** The first gateway run showed what requests-only costs. charpy's
+`notifications/initialized` went out unstamped, so on the downstream face
+it was a frame of charpy's with no join key at all. And the only join
+left for it was by content -- which for a notification with no params is
+the same bytes in every session, so the fixture gateway's *own*
+`initialized` upstream was joined to charpy's as `inferred`: a false join,
+one-sided at that. Stamping gives each of charpy's notifications its own
+key, and a gateway that forwards one carries the trace across exactly as
+it does a request.
+
+The second half is in the ledger, not here: a message whose content is
+empty once `_meta` is set aside is never content-joined
+(`interpose.ContentDigest`). Stamping alone would still let a gateway's
+contentless message, sent with no trace, match a contentless one of
+charpy's.
+
+**Cost.** Every notification charpy's peers send grows a `_meta`, which
+SEP-414 allows; nothing in the protocol keys on its absence.
+
+**Supersedes.** ADR-005's "every request it originates", which now reads
+every message.
+
+**Revisit if.** A subject is found that rejects `_meta` on a notification
+-- which would be a conformance failure, and excluded by the precondition.
+

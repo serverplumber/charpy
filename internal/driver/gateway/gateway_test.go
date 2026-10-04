@@ -14,14 +14,16 @@ import (
 	"github.com/serverplumber/charpy/internal/catalogue"
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/gateway"
+	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
 // fixture is the fixture gateway's binary, built once: the driver spawns a
-// process, so the subject it is tested against has to be one.
-var fixture string
+// process, so the subject it is tested against has to be one. metastrip is a
+// test-only gateway that drops _meta from what it forwards.
+var fixture, metastrip string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "charpy-gateway-test")
@@ -29,10 +31,16 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	fixture = filepath.Join(dir, "fixture-gateway")
-	build := exec.Command("go", "build", "-o", fixture, "github.com/serverplumber/charpy/internal/fixture/gateway/cmd/fixture-gateway")
-	build.Stderr = os.Stderr
-	if err := build.Run(); err != nil {
-		panic("building the fixture gateway: " + err.Error())
+	metastrip = filepath.Join(dir, "metastrip")
+	for out, pkg := range map[string]string{
+		fixture:   "github.com/serverplumber/charpy/internal/fixture/gateway/cmd/fixture-gateway",
+		metastrip: "./testdata/metastrip",
+	} {
+		build := exec.Command("go", "build", "-o", out, pkg)
+		build.Stderr = os.Stderr
+		if err := build.Run(); err != nil {
+			panic("building " + pkg + ": " + err.Error())
+		}
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
@@ -81,6 +89,14 @@ func (w logWriter) Write(p []byte) (int, error) {
 // the transcript.
 func drive(t *testing.T, c interpose.Case) *transcript.Transcript {
 	t.Helper()
+	return driveWith(t, c, func(addr string) []string {
+		return []string{fixture, "-http", addr, "-upstream", "{upstream0}", "-upstream", "{upstream1}"}
+	})
+}
+
+// driveWith runs one case against a gateway the command starts on addr.
+func driveWith(t *testing.T, c interpose.Case, command func(addr string) []string) *transcript.Transcript {
+	t.Helper()
 	var buf strings.Builder
 	sched := clock.RealSched()
 	tr, err := transcript.New(&buf, transcript.Options{
@@ -95,8 +111,7 @@ func drive(t *testing.T, c interpose.Case) *transcript.Transcript {
 	}
 	addr := freeAddr(t)
 	d, err := gateway.New(gateway.Options{
-		Command: []string{fixture, "-http", addr,
-			"-upstream", "{upstream0}", "-upstream", "{upstream1}"},
+		Command:    command(addr),
 		SubjectURL: "http://" + addr + "/",
 		Errs:       logWriter{t},
 		Case:       c,
@@ -171,6 +186,18 @@ func checkRun(t *testing.T, tr *transcript.Transcript) {
 	}
 }
 
+// notes is the transcript's harness notes, for a failure to say why a fault
+// did not apply.
+func notes(tr *transcript.Transcript) []string {
+	var out []string
+	for _, e := range tr.Events(transcript.Note) {
+		if h, ok := e.Detail["harness"].(string); ok {
+			out = append(out, h)
+		}
+	}
+	return out
+}
+
 // appliedOn is the face each applied fault acted on.
 func appliedOn(tr *transcript.Transcript) []transcript.Face {
 	var out []transcript.Face
@@ -188,7 +215,7 @@ func TestADownstreamCaseRunsThroughTheGateway(t *testing.T) {
 	tr := drive(t, shipped(t, "stream/truncate-request-body"))
 	checkRun(t, tr)
 	if got := appliedOn(tr); len(got) != 1 || got[0] != transcript.Downstream {
-		t.Errorf("faults applied on %v, want once on the downstream face", got)
+		t.Errorf("faults applied on %v, want once on the downstream face; notes: %q", got, notes(tr))
 	}
 }
 
@@ -199,7 +226,7 @@ func TestAnUpstreamCaseRunsThroughTheGateway(t *testing.T) {
 	tr := drive(t, shipped(t, "stream/truncate-mid-event"))
 	checkRun(t, tr)
 	if got := appliedOn(tr); len(got) != 1 || got[0] != transcript.Upstream {
-		t.Errorf("faults applied on %v, want once on the upstream face", got)
+		t.Errorf("faults applied on %v, want once on the upstream face; notes: %q", got, notes(tr))
 	}
 }
 
@@ -214,6 +241,85 @@ func TestACommandNamingNoUpstreamIsRefused(t *testing.T) {
 		})
 		if err == nil {
 			t.Errorf("%v: accepted", command)
+		}
+	}
+}
+
+// calls pairs each of charpy's downstream tools/call requests with the
+// upstream tools/call requests that share its join.
+func calls(t *testing.T, tr *transcript.Transcript) (down, up []*transcript.FrameLine) {
+	t.Helper()
+	for _, f := range tr.Frames() {
+		if f.Kind != envelope.KindRequest || f.Method == nil || *f.Method != "tools/call" {
+			continue
+		}
+		switch {
+		case f.Face == transcript.Downstream && f.Direction == transcript.C2S:
+			down = append(down, f)
+		case f.Face == transcript.Upstream && f.Direction == transcript.C2S:
+			up = append(up, f)
+		}
+	}
+	if len(down) == 0 || len(up) == 0 {
+		t.Fatalf("%d downstream and %d upstream tools/call requests, want both", len(down), len(up))
+	}
+	return down, up
+}
+
+func joinID(f *transcript.FrameLine) string {
+	if f.Link.CharpyID == nil {
+		return ""
+	}
+	return *f.Link.CharpyID
+}
+
+// The fixture forwards _meta, so each call charpy makes joins its forwarded
+// copy as traced, and the answers on both faces take the same join.
+func TestACallJoinsTracedThroughTheFixture(t *testing.T) {
+	tr := drive(t, shipped(t, "stream/truncate-mid-event"))
+	down, up := calls(t, tr)
+	ids := map[string]bool{}
+	for _, f := range down {
+		if f.Link.Via != transcript.ViaTraced || joinID(f) == "" {
+			t.Errorf("charpy's call %d joined %+v, want traced", f.Seq, f.Link)
+		}
+		ids[joinID(f)] = true
+	}
+	for _, f := range up {
+		if f.Link.Via != transcript.ViaTraced || !ids[joinID(f)] {
+			t.Errorf("forwarded call %d joined %+v, want traced to one of charpy's", f.Seq, f.Link)
+		}
+	}
+	// Answers inherit: every frame carrying a join charpy's calls made.
+	answered := 0
+	for _, f := range tr.Frames() {
+		if (f.Kind == envelope.KindResponse || f.Kind == envelope.KindError) && ids[joinID(f)] {
+			answered++
+		}
+	}
+	if answered == 0 {
+		t.Error("no answer took its call's join")
+	}
+}
+
+// A gateway that drops _meta drops the trace: its forwarded calls join only
+// by content, inferred, and each to exactly the call it copies -- the calls
+// are distinct, so the recall is a unique one.
+func TestACallJoinsInferredWhenTheGatewayDropsTheTrace(t *testing.T) {
+	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), func(addr string) []string {
+		return []string{metastrip, "-http", addr, "-upstream", "{upstream0}"}
+	})
+	down, up := calls(t, tr)
+	ids := map[string]bool{}
+	for _, f := range down {
+		ids[joinID(f)] = true
+	}
+	for _, f := range up {
+		if f.Link.Via != transcript.ViaInferred || !ids[joinID(f)] {
+			t.Errorf("forwarded call %d joined %+v, want inferred to one of charpy's", f.Seq, f.Link)
+		}
+		if f.Link.Confidence != interpose.ConfidenceUniqueContent {
+			t.Errorf("forwarded call %d joined at confidence %v, want a unique match", f.Seq, f.Link.Confidence)
 		}
 	}
 }
