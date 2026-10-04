@@ -21,6 +21,7 @@ import (
 	"github.com/serverplumber/charpy/cases"
 	"github.com/serverplumber/charpy/internal/catalogue"
 	"github.com/serverplumber/charpy/internal/clock"
+	"github.com/serverplumber/charpy/internal/driver/gateway"
 	"github.com/serverplumber/charpy/internal/driver/hostile"
 	"github.com/serverplumber/charpy/internal/driver/proxy"
 	"github.com/serverplumber/charpy/internal/driver/stdio"
@@ -62,14 +63,17 @@ func cmdRun(args []string, _ io.Writer) int {
 	subjectURL := fs.String("subject-url", "", "an HTTP subject already running at this URL; charpy proxies it (requires --case)")
 	hostileMode := fs.Bool("hostile", false, "serve as a hostile server for a client under test that spawned charpy over stdio; --case filters which cases arm")
 	hostileHTTP := fs.String("hostile-http", "", "serve hostile over HTTP at this address instead of stdio (e.g. :8080); the client under test connects here")
+	gatewayMode := fs.Bool("gateway", false, "drive a gateway charpy spawns per case: {upstream0}, {upstream1}, ... in its command become charpy's upstream URLs; --subject-url is where it serves (requires --case)")
 	tool := fs.String("tool", "", "tool the script calls; empty takes the first the subject lists")
 	toolArgs := fs.String("args", "", "JSON object of arguments passed to every --tool call; empty sends none")
 	timeout := fs.Duration("timeout", 0, "how long a scripted run waits on a subject that has stopped answering (default 30s)")
 	fs.Usage = func() {
 		fmt.Fprint(os.Stderr, "usage: charpy run [flags] -- <subject command>\n"+
-			"       charpy run --subject-url <url> --case <glob> --revision <rev> [flags]\n\n"+
+			"       charpy run --subject-url <url> --case <glob> --revision <rev> [flags]\n"+
+			"       charpy run --gateway --subject-url <url> --case <glob> --revision <rev> [flags] -- <gateway command>\n\n"+
 			"Over stdio, charpy launches the subject and speaks to it over its pipes.\n"+
-			"With --subject-url, charpy proxies an HTTP subject the user is already running.\n\n"+
+			"With --subject-url, charpy proxies an HTTP subject the user is already running.\n"+
+			"With --gateway, charpy spawns the gateway per case and stands on both sides of it.\n\n"+
 			"Without --case, charpy relays: the client's own user drives it and the run\n"+
 			"ends on a signal. With --case, charpy drives, one case per run, and each\n"+
 			"case gets its own transcript.\n\n")
@@ -88,6 +92,15 @@ func cmdRun(args []string, _ io.Writer) int {
 	if *timeout < 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: --timeout %s is negative\n", *timeout)
 		return exitHarness
+	}
+
+	if *gatewayMode {
+		cfg, code := runConfig(*rev, *seedFlag, string(transcript.ClassGateway), string(transcript.TransportHTTP))
+		if code != exitClean {
+			return code
+		}
+		cfg.stim, cfg.timeout = stim, *timeout
+		return gatewayScripted(command, *subjectURL, cfg, *caseGlob, *outDir, *noRedact, out)
 	}
 
 	if *subjectURL != "" {
@@ -132,6 +145,13 @@ func cmdRun(args []string, _ io.Writer) int {
 		return code
 	}
 	cfg.stim, cfg.timeout = stim, *timeout
+	if cfg.class == transcript.ClassGateway {
+		// A gateway has two faces, and the shim holds one connection. Saying
+		// so beats producing a half-faced transcript that reads as complete.
+		fmt.Fprint(os.Stderr, "charpy run: a gateway has two faces; the stdio shim drives one.\n"+
+			"Use --gateway, which stands charpy on both sides of it.\n")
+		return exitHarness
+	}
 
 	if *caseGlob != "" {
 		return scripted(command, cfg, *caseGlob, *outDir, *noRedact, out)
@@ -243,11 +263,9 @@ func runConfig(rev, seedFlag, class, transport string) (config, int) {
 	case transcript.ClassClient:
 		cfg.class, cfg.face = transcript.ClassClient, transcript.Upstream
 	case transcript.ClassGateway:
-		// A gateway has two faces, and the shim holds one connection. Saying
-		// so beats producing a half-faced transcript that reads as complete.
-		fmt.Fprint(os.Stderr, "charpy run: a gateway has two faces; the stdio shim drives one.\n"+
-			"Use --subject server or client, or wait for the proxy driver.\n")
-		return config{}, exitHarness
+		// The header's revision is the downstream face's (exchange.Run's
+		// Headed), so that is the face a gateway run is cited from.
+		cfg.class, cfg.face = transcript.ClassGateway, transcript.Downstream
 	default:
 		fmt.Fprintf(os.Stderr, "charpy run: unknown subject class %q\n", class)
 		return config{}, exitHarness
@@ -693,6 +711,105 @@ func httpScriptOne(ctx context.Context, url string, cfg config, c interpose.Case
 
 	runErr := sc.Run(ctx)
 
+	if err := closeT(); err != nil {
+		fmt.Fprintf(os.Stderr, "charpy run: transcript: %v\n", err)
+		return exitHarness
+	}
+	if runErr != nil {
+		fmt.Fprintf(out, "charpy run: %s: %v\n", c.ID, runErr)
+		return exitHarness
+	}
+
+	fmt.Fprintf(out, "  %s\n    %s\n", c.Citation, filepath.Join(outDir, runID+".jsonl"))
+	return exitClean
+}
+
+// gatewayScripted runs cases against a gateway charpy spawns, one gateway
+// process and one transcript per case (internal/driver/gateway).
+func gatewayScripted(command []string, url string, cfg config, glob, outDir string, noRedact bool, out io.Writer) int {
+	switch {
+	case cfg.auto:
+		fmt.Fprint(os.Stderr, "charpy run: --gateway needs an explicit --revision.\n"+
+			"charpy originates the traffic on both faces, so it has to choose an era to speak.\n")
+		return exitHarness
+	case url == "":
+		fmt.Fprint(os.Stderr, "charpy run: --gateway needs --subject-url, where the gateway serves its clients.\n")
+		return exitHarness
+	case len(command) == 0:
+		fmt.Fprint(os.Stderr, "charpy run: --gateway needs the command that starts the gateway, after --.\n")
+		return exitHarness
+	case glob == "":
+		fmt.Fprint(os.Stderr, "charpy run: --gateway is owned stimulus and needs --case to say what to run.\n")
+		return exitHarness
+	}
+
+	selected := matching(cfg.cases, glob)
+	if len(selected) == 0 {
+		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to a gateway at %s\n", glob, cfg.revision)
+		explainUnobservable(cfg, glob)
+		return exitHarness
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Fprintf(out, "charpy: seed %s, %d case(s) against a gateway at %s, %s\n", cfg.seed, len(selected), url, cfg.revision)
+
+	worst := exitClean
+	for _, c := range selected {
+		if ctx.Err() != nil {
+			fmt.Fprintf(out, "charpy: stopped before %s\n", c.ID)
+			break
+		}
+		if code := gatewayScriptOne(ctx, command, url, cfg, c, outDir, noRedact, out); code != exitClean {
+			worst = code
+		}
+	}
+	return worst
+}
+
+// gatewayScriptOne is one case: one gateway, charpy on both sides of it, one
+// transcript.
+func gatewayScriptOne(ctx context.Context, command []string, url string, cfg config, c interpose.Case,
+	outDir string, noRedact bool, out io.Writer) int {
+
+	tr, runID, closeT, code := openTranscript(outDir, cfg, transcript.ModeProxy, peer.Describe(cfg.revision), noRedact, out)
+	if code != exitClean {
+		return code
+	}
+	subjLog, closeLog, code := openSubjectLog(outDir, runID, out)
+	if code != exitClean {
+		_ = closeT()
+		return code
+	}
+
+	sched := clock.RealSched()
+	d, err := gateway.New(gateway.Options{
+		Command:    command,
+		Env:        os.Environ(),
+		SubjectURL: url,
+		Errs:       io.MultiWriter(out, subjLog),
+		Case:       c,
+		Era:        cfg.revision,
+		Stimulus:   cfg.stim,
+		Timeout:    cfg.timeout,
+		Transcript: tr,
+		Sched:      sched,
+		Ledger:     interpose.NewLedger(sched),
+		RunSeed:    cfg.seed,
+	})
+	if err != nil {
+		fmt.Fprintf(out, "charpy run: %s: %v\n", c.ID, err)
+		_ = closeLog()
+		_ = closeT()
+		return exitHarness
+	}
+
+	runErr := d.Run(ctx)
+
+	if err := closeLog(); err != nil {
+		fmt.Fprintf(out, "charpy run: subject log: %v\n", err)
+	}
 	if err := closeT(); err != nil {
 		fmt.Fprintf(os.Stderr, "charpy run: transcript: %v\n", err)
 		return exitHarness

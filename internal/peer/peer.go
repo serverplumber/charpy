@@ -38,6 +38,13 @@ type Options struct {
 	// Name and Title identify charpy to the subject. Both default.
 	Name  string
 	Title string
+
+	// ToolPrefix is prepended to every tool a server peer serves; a client
+	// peer ignores it. A gateway run stands two reference servers behind the
+	// subject, and gives each its own prefix so their tools never share a
+	// name: which upstream received a call is then a fact read off the call,
+	// not an inference about how the gateway routes.
+	ToolPrefix string
 }
 
 // Client is the reference peer as a client: a correct MCP client whose bytes
@@ -198,7 +205,7 @@ func NewServer(o Options) (*Server, error) {
 	}
 
 	ask := newAsker(o.Era, false)
-	srv := newMCPServer(name, title, o.Era, ask)
+	srv := newMCPServer(name, title, o.ToolPrefix, o.Era, ask)
 
 	serverReads, charpyWrites := io.Pipe()
 	charpyReads, serverWrites := io.Pipe()
@@ -388,21 +395,21 @@ var errRejected = &jsonrpc.Error{Code: -32005}
 // surface, restricted to one era. Claiming another era is a fault
 // (capability_flip on the initialize result), not a second configuration
 // (docs/design/revisions.md section 4).
-func newMCPServer(name, title string, era revision.Revision, ask *asker) *mcp.Server {
+func newMCPServer(name, title, prefix string, era revision.Revision, ask *asker) *mcp.Server {
 	opts := &mcp.ServerOptions{InitializedHandler: ask.initialized}
 	if era != "" {
 		opts.SupportedProtocolVersions = []string{string(era)}
 	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: name, Title: title}, opts)
-	addTools(srv)
+	addTools(srv, prefix)
 	return srv
 }
 
 // addTools registers the reference server's tools. It is its own function so
 // that OutputSchemas can list the same set from a server no client under test
 // will ever reach.
-func addTools(srv *mcp.Server) {
-	mcp.AddTool(srv, &mcp.Tool{Name: "echo", Description: "echoes its argument"},
+func addTools(srv *mcp.Server, prefix string) {
+	mcp.AddTool(srv, &mcp.Tool{Name: prefix + "echo", Description: "echoes its argument"},
 		func(ctx context.Context, req *mcp.CallToolRequest, args map[string]any) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil, nil
 		})
@@ -411,7 +418,7 @@ func addTools(srv *mcp.Server) {
 	// a fault aimed at tools/call has an answer to land on. Its result is
 	// typed, so the SDK declares an outputSchema for it -- the declaration a
 	// schema_violation with target declared_output_schema breaks.
-	mcp.AddTool(srv, &mcp.Tool{Name: "add_numbers", Description: "adds two numbers"},
+	mcp.AddTool(srv, &mcp.Tool{Name: prefix + "add_numbers", Description: "adds two numbers"},
 		func(ctx context.Context, req *mcp.CallToolRequest, args AddArgs) (*mcp.CallToolResult, AddResult, error) {
 			return nil, AddResult{Sum: args.A + args.B}, nil
 		})
@@ -429,6 +436,20 @@ func OutputSchemas() (map[string]json.RawMessage, error) {
 	return schemas, schemasErr
 }
 
+// OutputSchemasFor is OutputSchemas for a server built with a ToolPrefix: the
+// same declarations, under the names that server serves them by.
+func OutputSchemasFor(prefix string) (map[string]json.RawMessage, error) {
+	base, err := OutputSchemas()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]json.RawMessage, len(base))
+	for name, s := range base {
+		out[prefix+name] = s
+	}
+	return out, nil
+}
+
 var (
 	schemasOnce sync.Once
 	schemas     map[string]json.RawMessage
@@ -440,7 +461,7 @@ func listOutputSchemas() (map[string]json.RawMessage, error) {
 	defer cancel()
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: "charpy-schemas"}, nil)
-	addTools(srv)
+	addTools(srv, "")
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := srv.Connect(ctx, st, nil)
 	if err != nil {
@@ -529,7 +550,7 @@ func ServerHandler(o Options) (*HTTPServer, error) {
 	ask := newAsker(o.Era, true)
 	return &HTTPServer{
 		handler: mcp.NewStreamableHTTPHandler(
-			func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.Era, ask) }, nil,
+			func(*http.Request) *mcp.Server { return newMCPServer(name, title, o.ToolPrefix, o.Era, ask) }, nil,
 		),
 		ask: ask,
 	}, nil

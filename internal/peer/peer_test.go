@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -308,5 +309,52 @@ func TestTheReferenceServerDeclaresAddNumbersOutput(t *testing.T) {
 	}
 	if got, _ := res.StructuredContent.(map[string]any); got["sum"] != float64(8) {
 		t.Errorf("structuredContent = %v, want sum 8", res.StructuredContent)
+	}
+}
+
+// A gateway run gives each reference upstream a prefix, so no two serve a
+// tool by the same name, and the declarations follow the names.
+func TestToolPrefixNamesEveryTool(t *testing.T) {
+	h, err := peer.ServerHandler(peer.Options{Era: revision.V20251125, ToolPrefix: "u0_"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(h)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "1"}, nil).
+		Connect(ctx, &mcp.StreamableClientTransport{Endpoint: ts.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	listed, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, tl := range listed.Tools {
+		names = append(names, tl.Name)
+		if !strings.HasPrefix(tl.Name, "u0_") {
+			t.Errorf("tool %q served without the prefix", tl.Name)
+		}
+	}
+	if !slices.Contains(names, "u0_add_numbers") {
+		t.Fatalf("tools = %v, want u0_add_numbers among them", names)
+	}
+
+	base, err := peer.OutputSchemas()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefixed, err := peer.OutputSchemasFor("u0_")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(prefixed["u0_add_numbers"]) != string(base["add_numbers"]) || len(prefixed) != len(base) {
+		t.Errorf("prefixed declarations %v do not match the base ones %v", prefixed, base)
 	}
 }

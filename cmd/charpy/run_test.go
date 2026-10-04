@@ -549,3 +549,24 @@ func TestRunNamesACaseNothingCanObserve(t *testing.T) {
 		t.Errorf("the refusal does not say what could see the answer:\n%s", out.String())
 	}
 }
+
+// --gateway needs everything a gateway run is made of, and says which part is
+// missing rather than starting half a run.
+func TestGatewayRunRefusesWhatItCannotRun(t *testing.T) {
+	dir := t.TempDir()
+	gw := []string{"--", "gw", "-upstream", "{upstream0}"}
+	for name, args := range map[string][]string{
+		"no subject URL": append([]string{"--gateway", "--case", "*", "--revision", "2025-11-25"}, gw...),
+		"no command":     {"--gateway", "--subject-url", "http://127.0.0.1:1/", "--case", "*", "--revision", "2025-11-25"},
+		"no case":        append([]string{"--gateway", "--subject-url", "http://127.0.0.1:1/", "--revision", "2025-11-25"}, gw...),
+		"auto revision":  append([]string{"--gateway", "--subject-url", "http://127.0.0.1:1/", "--case", "*"}, gw...),
+		"stdio gateway":  {"--subject", "gateway", "--", "gw"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var out bytes.Buffer
+			if code := cmdRun(append([]string{"--out", dir}, args...), &out); code != exitHarness {
+				t.Errorf("exit %d, want %d\n%s", code, exitHarness, out.String())
+			}
+		})
+	}
+}

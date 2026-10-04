@@ -171,36 +171,43 @@ ______________________________________________________________________
 
 ## 4. Drivers
 
-| Mode          | Subject           | Stimulus            | Faces | Cases per run  | Status        |
-|---------------|-------------------|---------------------|-------|----------------|---------------|
-| stdio shim    | server            | relayed             | 1     | all applicable | built         |
-| stdio script  | server            | owned               | 1     | one            | built         |
-| HTTP proxy    | server            | owned               | 1     | one            | built         |
-| hostile stdio | client            | relayed             | 1     | all applicable | built         |
-| hostile HTTP  | client            | relayed             | 1     | all applicable | built         |
-| gateway       | gateway           | owned, both faces   | 2     | —              | **not built** |
-| inproc        | linked Go gateway | owned               | —     | —              | **not built** |
-| fleet         | any               | N synthetic clients | —     | —              | **not built** |
+| Mode           | Subject           | Stimulus            | Faces | Cases per run  | Status        |
+|----------------|-------------------|---------------------|-------|----------------|---------------|
+| stdio shim     | server            | relayed             | 1     | all applicable | built         |
+| stdio script   | server            | owned               | 1     | one            | built         |
+| HTTP proxy     | server            | owned               | 1     | one            | built         |
+| hostile stdio  | client            | relayed             | 1     | all applicable | built         |
+| hostile HTTP   | client            | relayed             | 1     | all applicable | built         |
+| gateway        | gateway, spawned  | owned, both faces   | 2     | one            | built         |
+| gateway attach | gateway, running  | owned, both faces   | 2     | —              | **not built** |
+| inproc         | linked Go gateway | owned               | —     | —              | **not built** |
+| fleet          | any               | N synthetic clients | —     | —              | **not built** |
 
-| Mode          | Invocation                            |
-|---------------|---------------------------------------|
-| stdio shim    | `charpy run -- <cmd>`                 |
-| stdio script  | `charpy run --case … -- <cmd>`        |
-| HTTP proxy    | `charpy run --subject-url … --case …` |
-| hostile stdio | `charpy run --hostile`                |
-| hostile HTTP  | `charpy run --hostile-http <addr>`    |
+| Mode          | Invocation                                                             |
+|---------------|------------------------------------------------------------------------|
+| stdio shim    | `charpy run -- <cmd>`                                                  |
+| stdio script  | `charpy run --case … -- <cmd>`                                         |
+| HTTP proxy    | `charpy run --subject-url … --case …`                                  |
+| hostile stdio | `charpy run --hostile`                                                 |
+| hostile HTTP  | `charpy run --hostile-http <addr>`                                     |
+| gateway       | `charpy run --gateway --subject-url … --case … -- <cmd {upstream0} …>` |
 
 - *Relayed* means somebody else's traffic: in the shim, the client that
   spawned charpy; in the hostile modes, the client under test.
-- The HTTP proxy is the only mode that fires the liveness probe.
+- The HTTP proxy and the gateway driver fire the liveness probe.
 - Hostile HTTP sees real reconnects, each as its own connection.
+- The gateway driver spawns the gateway per case, filling charpy's upstream
+  URLs in for `{upstream0}`, `{upstream1}`, …; each upstream is its own
+  reference server behind its own proxy, its tools prefixed `uN_`. Nothing
+  is correlated across the gateway until G4 (`open-problems.md`).
 - inproc is for the leaks and races the wire cannot see (ADR-002); fleet is
   soak mode, v1 (`design/soak.md`).
 
 The hostile drivers run the reference peer as an in-process *server*
-(`peer.NewServer`) and fault its responses toward the client. That server
-peer is also what the gateway driver's upstream face needs, so the gateway
-driver is not waiting on a missing part, only on being built.
+(`peer.NewServer`) and fault its responses toward the client. The gateway
+driver stands the same server peer behind the gateway as its upstreams, and
+the client peer in front of it, with a proxy on every hop and one run
+across all of them.
 
 ______________________________________________________________________
 
@@ -261,8 +268,8 @@ tried in order of how much they can be trusted:
 | Regime      | Basis                                            | Status                    |
 |-------------|--------------------------------------------------|---------------------------|
 | `forwarded` | charpy relayed the frame and stamped both copies | exercised by the proxy    |
-| `traced`    | W3C trace context in `_meta` (SEP-414, ADR-005)  | needs the gateway driver  |
-| `inferred`  | a content digest over method and payload         | needs the gateway driver  |
+| `traced`    | W3C trace context in `_meta` (SEP-414, ADR-005)  | not wired yet (G4)        |
+| `inferred`  | a content digest over method and payload         | not wired yet (G4)        |
 | `none`      | no join                                          | correct for a single face |
 
 No gateway verdict may rest on an `inferred` join. It is SKIPPED instead,
@@ -345,6 +352,7 @@ ______________________________________________________________________
 | `driver/stdio`    | shim relay and scripted stdio               | —                            |
 | `driver/proxy`    | HTTP proxy, SSE cuts, liveness probe        | —                            |
 | `driver/hostile`  | client under test, stdio and HTTP           | —                            |
+| `driver/gateway`  | gateway under test, spawned per case        | —                            |
 | `fixture/gateway` | a gateway of charpy's own, to drive against | oracle §7                    |
 | `driver/inproc`   | not built                                   | ADR-002                      |
 | `driver/fleet`    | not built                                   | soak                         |
@@ -358,16 +366,17 @@ ______________________________________________________________________
 
 ## 9. Built and designed
 
-**Built.** The five drivers marked built in §4, eight mechanisms, the
+**Built.** The six drivers marked built in §4, eight mechanisms, the
 transcript in both directions, oracle layers 1, 2 (I1–I3) and 4 (reaction,
 expectations, recovery), coverage, two report formats, the determinism
 gate, `cases` and `policy validate`, and the fixture gateway the gateway
-driver will be pointed at: conformant, with three bugs that can be planted
+driver is pointed at: conformant, with three bugs that can be planted
 behind flags.
 
 **Designed and not built.**
 
-- the gateway driver and two-face correlation (`traced`, `inferred`)
+- attaching to a gateway already running, and two-face correlation
+  (`traced`, `inferred`)
 - invariants I4–I13
 - layer 1's check of a result's `structuredContent` against its tool's
   declared `outputSchema`

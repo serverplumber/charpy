@@ -101,6 +101,24 @@ demo-hostile-http: demo-build
     MCP_CONFORMANCE_SCENARIO=tools_call \
         {{ex_bin}}/everything-client http://127.0.0.1:8080/ || true
 
+#   charpy run --gateway --subject-url <url> --case '<glob>' --revision <rev> \
+#       -- <gateway command naming {upstream0} {upstream1}>
+#
+# charpy stands on both sides of a gateway: its own client in front, its own
+# reference servers behind, and a fault on whichever face the case names.
+# It spawns the gateway once per case, so no case meets a gateway that cached
+# an earlier one's upstreams, and fills charpy's upstream URLs into the
+# command wherever {upstream0}, {upstream1}, ... appear. Here the gateway is
+# charpy's own fixture; against yours, give the command that starts it and
+# the URL it serves its clients on.
+[doc('charpy drives a gateway it spawns, faulting either face')]
+demo-gateway: demo-build
+    {{gocmd}} build -o {{ex_bin}}/fixture-gateway ./internal/fixture/gateway/cmd/fixture-gateway
+    ./charpy run --gateway --subject-url http://127.0.0.1:9350/ --case '*' \
+        --revision 2025-11-25 --timeout 5s --out {{ex_out}} -- \
+        {{ex_bin}}/fixture-gateway -http 127.0.0.1:9350 \
+            -upstream '{upstream0}' -upstream '{upstream1}'
+
 # Clone and build github/github-mcp-server, a subject nobody here maintains.
 # The only recipe that needs the network; everything else builds from the
 # module cache.

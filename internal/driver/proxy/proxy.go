@@ -67,6 +67,18 @@ type Options struct {
 	// Owned stimulus only, as over stdio.
 	AnswerDestroyed bool
 
+	// Run joins the proxy to a run other proxies share: a subject with more
+	// than one face to it -- a gateway -- has one run, one ledger and one
+	// header across all of them. Nil gives the proxy a run of its own over
+	// Ledger, Transcript and Cases. When set, the run's ledger and writer are
+	// the proxy's, and Ledger and Transcript must be nil or the same ones.
+	Run *exchange.Run
+	// ConnPrefix is prepended to the connection ids the proxy names. Ids are
+	// unique within one proxy; a run with two proxies on one face -- a
+	// gateway's two upstreams -- needs them unique across both, or the
+	// ledger takes one upstream's request 1 for the other's.
+	ConnPrefix string
+
 	RunSeed   string
 	ClientID  string
 	SessionID string
@@ -116,7 +128,7 @@ func New(o Options) (*Proxy, error) {
 		o.Face = transcript.Downstream
 	}
 	if o.ConnID == "" {
-		o.ConnID = "c-0"
+		o.ConnID = o.ConnPrefix + "c-0"
 	}
 	if o.ClientID == "" {
 		o.ClientID = "c0"
@@ -134,7 +146,23 @@ func New(o Options) (*Proxy, error) {
 		// on both copies -- not the ViaNone the single-faced shim records.
 		correlate = func(envelope.Message) transcript.Link { return interpose.Forwarded(interpose.NewJoinID()) }
 	}
-	run := &exchange.Run{Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases}
+	run := o.Run
+	if run == nil {
+		run = &exchange.Run{Ledger: o.Ledger, Transcript: o.Transcript, Cases: o.Cases}
+	} else {
+		switch {
+		case o.Ledger == nil:
+			o.Ledger = run.Ledger
+		case o.Ledger != run.Ledger:
+			return nil, errors.New("proxy: Ledger differs from the shared run's")
+		}
+		switch {
+		case o.Transcript == nil:
+			o.Transcript = run.Transcript
+		case o.Transcript != run.Transcript:
+			return nil, errors.New("proxy: Transcript differs from the shared run's")
+		}
+	}
 	return &Proxy{
 		o:      o,
 		x:      run.Face(o.Face, transcript.TransportHTTP, correlate),
@@ -433,7 +461,7 @@ func (d *discard) Flush()                      {}
 func (p *Proxy) conn(r *http.Request) *exchange.Conn {
 	sid := r.Header.Get("Mcp-Session-Id")
 	if sid == "" {
-		id := "c-" + strconv.FormatInt(p.nextConn.Add(1), 10)
+		id := p.o.ConnPrefix + "c-" + strconv.FormatInt(p.nextConn.Add(1), 10)
 		return p.x.Conn(p.o.ClientID, id, id)
 	}
 	return p.connFor(sid)

@@ -405,3 +405,87 @@ than force it.
 code-scanning dashboard or any other SARIF consumer, or the INFORMATIONAL /
 NON-STRICT ADR landing, at which point SARIF is the standard carrier for
 the grade it introduces.
+
+---
+
+## A gateway's upstreams are separate hosts, never paths under one
+
+**Gap.** The gateway driver gives each of charpy's upstreams its own
+reference server, its own proxy and its own listener: the gateway is
+handed `http://127.0.0.1:A/` and `http://127.0.0.1:B/`. A gateway that
+addresses its upstreams as paths under one host -- `/u0/mcp`, `/u1/mcp`
+behind one URL -- never meets that shape under charpy, and a gateway whose
+configuration only accepts one host cannot be pointed at charpy at all.
+
+**Why it exists.** Separate listeners needed nothing new: a proxy forwards
+to one URL, and two proxies on one run share a ledger once their
+connection ids are prefixed. One host would need one upstream proxy that
+routes by path to two servers and rewrites the path on the way, and the
+transcript records no request path, so which upstream a frame went to would
+have to be added to the frame rather than read off its connection.
+
+**Why it is not closed for v0.** No gateway yet run under charpy needs it,
+and the fixture takes one URL per upstream.
+
+**What closing it would take.** A path-routing upstream proxy -- or a
+router in front of the existing ones -- and the path recorded on the
+frame's HTTP detail, so the upstream a frame reached is still a fact on the
+line. The connection prefix that names an upstream today would become a
+path prefix.
+
+**Trigger to revisit.** The first gateway whose upstream configuration
+cannot take two hosts.
+
+---
+
+## Upstream tools carry a per-upstream prefix
+
+**Gap.** charpy's two reference upstreams serve the same tools under
+different names, `u0_add_numbers` and `u1_add_numbers`, so which upstream
+received a call is read off the call's name. Real upstreams do not prefix
+their tools. A gateway that rewrites or namespaces tool names sees charpy's
+naming rather than its own convention, and a gateway case that depends on
+two upstreams declaring the same name cannot be expressed.
+
+**Why it exists.** It is the cheapest way to make routing a fact rather
+than an inference: with disjoint names, an upstream receiving a tool it
+never declared is wrong on its face (I7). The alternative -- inferring the
+route from the gateway's own naming scheme -- trades stated structure for
+runtime guessing.
+
+**Why it is not closed for v0.** Nothing needs overlapping names yet, and
+I7 is not built.
+
+**What closing it would take.** Identifying the upstream a call reached by
+the connection it arrived on, which the connection prefix already does,
+and letting the tool names be whatever a case says they are -- including
+the same name on both upstreams, for the collision cases a real gateway
+has to handle.
+
+**Trigger to revisit.** The first case that needs two upstreams to declare
+the same name, or a gateway that rewrites tool names.
+
+---
+
+## Nothing is correlated across a gateway yet
+
+**Gap.** Both faces of a gateway run record `link.via = "none"`. The
+transcript holds what crossed each face, but nothing joins a downstream
+request to the upstream request the gateway forwarded for it, so no
+invariant that needs the join (I5's attribution, I6, I7's routing window)
+can be judged from a gateway transcript.
+
+**Why it exists.** The gateway driver came before correlation by design:
+G3 stands charpy on both sides, G4 joins them. The proxy's default
+`forwarded` link would have been a lie here -- charpy relays only its own
+hops, and it is the gateway that forwards across.
+
+**Why it is not closed for v0.** It is the next item (G4): wire the
+ledger's `Originated`/`LinkFor`, stamp `traceparent` on what charpy
+originates, and let a response inherit its request's join.
+
+**What closing it would take.** G4, as above. A gateway that drops
+`traceparent` will still join only by `inferred` content, and no gateway
+verdict may rest on an inferred join.
+
+**Trigger to revisit.** G4.
