@@ -16,6 +16,8 @@ import (
 	"github.com/serverplumber/charpy/internal/driver/gateway"
 	"github.com/serverplumber/charpy/internal/envelope"
 	"github.com/serverplumber/charpy/internal/interpose"
+	"github.com/serverplumber/charpy/internal/oracle"
+	"github.com/serverplumber/charpy/internal/oracle/reaction"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
@@ -89,13 +91,23 @@ func (w logWriter) Write(p []byte) (int, error) {
 // the transcript.
 func drive(t *testing.T, c interpose.Case) *transcript.Transcript {
 	t.Helper()
-	return driveWith(t, c, func(addr string) []string {
-		return []string{fixture, "-http", addr, "-upstream", "{upstream0}", "-upstream", "{upstream1}"}
-	})
+	return driveWith(t, c, 10*time.Second, planted())
 }
 
-// driveWith runs one case against a gateway the command starts on addr.
-func driveWith(t *testing.T, c interpose.Case, command func(addr string) []string) *transcript.Transcript {
+// planted starts the fixture gateway on two upstreams with the plants named.
+func planted(plants ...string) func(addr string) []string {
+	return func(addr string) []string {
+		cmd := []string{fixture, "-http", addr, "-upstream", "{upstream0}", "-upstream", "{upstream1}"}
+		if len(plants) > 0 {
+			cmd = append(cmd, "-plant", strings.Join(plants, ","))
+		}
+		return cmd
+	}
+}
+
+// driveWith runs one case against a gateway the command starts on addr, with
+// timeout bounding its start, its script and each question.
+func driveWith(t *testing.T, c interpose.Case, timeout time.Duration, command func(addr string) []string) *transcript.Transcript {
 	t.Helper()
 	var buf strings.Builder
 	sched := clock.RealSched()
@@ -116,7 +128,7 @@ func driveWith(t *testing.T, c interpose.Case, command func(addr string) []strin
 		Errs:       logWriter{t},
 		Case:       c,
 		Era:        revision.V20251125,
-		Timeout:    10 * time.Second,
+		Timeout:    timeout,
 		Transcript: tr, Sched: sched, Ledger: interpose.NewLedger(sched), RunSeed: "8f2c1a",
 	})
 	if err != nil {
@@ -306,7 +318,7 @@ func TestACallJoinsTracedThroughTheFixture(t *testing.T) {
 // by content, inferred, and each to exactly the call it copies -- the calls
 // are distinct, so the recall is a unique one.
 func TestACallJoinsInferredWhenTheGatewayDropsTheTrace(t *testing.T) {
-	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), func(addr string) []string {
+	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), 10*time.Second, func(addr string) []string {
 		return []string{metastrip, "-http", addr, "-upstream", "{upstream0}"}
 	})
 	down, up := calls(t, tr)
@@ -322,4 +334,133 @@ func TestACallJoinsInferredWhenTheGatewayDropsTheTrace(t *testing.T) {
 			t.Errorf("forwarded call %d joined at confidence %v, want a unique match", f.Seq, f.Link.Confidence)
 		}
 	}
+}
+
+// answers is the reaction oracle's account of the call the fault was carrying
+// and the three questions, keyed by role: "carried", "ping", "u0", "u1". Each is what the gateway did -- "answered",
+// "error" or "hang" -- and every finding must be OBSERVED.
+func answers(t *testing.T, tr *transcript.Transcript) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	for _, f := range reaction.Check(tr).Findings {
+		if f.Check != "reaction" {
+			continue
+		}
+		if f.Verdict != oracle.Observed {
+			t.Errorf("%s: %q (%s); notes: %q", f.Verdict, f.Summary, f.Reason, notes(tr))
+			continue
+		}
+		role := "ping"
+		for _, u := range []string{"u0", "u1"} {
+			if strings.Contains(f.Summary, "through "+u) {
+				role = u
+			}
+		}
+		if strings.Contains(f.Summary, "the call the fault was carrying") {
+			role = "carried"
+		}
+		switch {
+		case strings.Contains(f.Summary, "exited"):
+			role, out["exit"] = "exit", "exited"
+		case strings.Contains(f.Summary, "did not answer"):
+			out[role] = "hang"
+		case strings.Contains(f.Summary, "with an error"):
+			out[role] = "error"
+		default:
+			out[role] = "answered"
+		}
+	}
+	return out
+}
+
+func wantAnswers(t *testing.T, tr *transcript.Transcript, want map[string]string) {
+	t.Helper()
+	got := answers(t, tr)
+	for role, w := range want {
+		if got[role] != w {
+			t.Errorf("%s: %q, want %q (all: %v)", role, got[role], w, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Errorf("questions judged: %v, want %v", got, want)
+	}
+}
+
+// The fixture loses its upstream session to the cut and tells its client the
+// call failed, then opens a new session on the next call and answers all
+// three questions: the control for cascade.
+func TestAGatewayAnswersAllThreeAfterAnUpstreamCut(t *testing.T) {
+	tr := drive(t, shipped(t, "stream/truncate-mid-event"))
+	wantAnswers(t, tr, map[string]string{
+		"carried": "error", "ping": "answered", "u0": "answered", "u1": "answered",
+	})
+}
+
+// cascade ends the downstream session with the upstream one. The ping that
+// follows goes unanswered, and the calls never cross at all: charpy's client
+// has already seen its session end, so only the ping is judged. Whether the
+// cut call is answered with an error first races the plant's close, so either
+// is accepted -- but it is judged, on its traced join.
+func TestACascadingGatewayAnswersNothingAfterAnUpstreamCut(t *testing.T) {
+	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), 10*time.Second, planted("cascade"))
+	got := answers(t, tr)
+	if c := got["carried"]; c != "error" && c != "hang" {
+		t.Errorf("carried: %q, want an error or a hang (all: %v)", c, got)
+	}
+	delete(got, "carried")
+	if len(got) != 1 || got["ping"] != "hang" {
+		t.Errorf("questions judged: %v, want only ping, unanswered", got)
+	}
+}
+
+// hungCall holds open u0's first answer to a tools/call, for good, on a
+// stream left open: a hang no shipped case puts on a call
+// (gateway/upstream-credential-downstream hangs the handshake).
+func hungCall() interpose.Case {
+	return interpose.Case{
+		ID:       "test/upstream-call-hang",
+		Citation: "test/upstream-call-hang@2025-11-25#seed=8f2c1a",
+		Match: interpose.Match{
+			Method: interpose.ParseGlob("tools/call"), Face: transcript.Upstream,
+			Direction: transcript.S2C, Kind: envelope.KindResponse,
+		},
+		Fault: interpose.Fault{Kind: "hang", Params: map[string]any{"scope": "response", "withdraw_after_ms": int64(0)}},
+	}
+}
+
+// With its idle deadline the fixture gives up on the hung call and tells its
+// client so, then serves every question after.
+func TestAGatewayWithADeadlineErrorsTheHungCall(t *testing.T) {
+	tr := driveWith(t, hungCall(), 5*time.Second, planted())
+	wantAnswers(t, tr, map[string]string{
+		"carried": "error", "ping": "answered", "u0": "answered", "u1": "answered",
+	})
+}
+
+// nodeadline leaves the hung call unanswered until charpy's client gives up
+// on it. The cancellation reaches upstream, so the questions after it are
+// served -- they cannot tell this gateway from the one above; only the
+// carried call does.
+func TestAGatewayWithoutADeadlineHangsTheCall(t *testing.T) {
+	tr := driveWith(t, hungCall(), 5*time.Second, planted("nodeadline"))
+	wantAnswers(t, tr, map[string]string{
+		"carried": "hang", "ping": "answered", "u0": "answered", "u1": "answered",
+	})
+}
+
+// A gateway that drops the trace leaves the carried call joined only by
+// content, and the oracle says so rather than judge it.
+func TestACarriedCallThroughAStrippingGatewayIsInconclusive(t *testing.T) {
+	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), 10*time.Second, func(addr string) []string {
+		return []string{metastrip, "-http", addr, "-upstream", "{upstream0}"}
+	})
+	for _, f := range reaction.Check(tr).Findings {
+		if f.Reason == "carried-call-join-inferred" {
+			if f.Verdict != oracle.Inconclusive {
+				t.Errorf("verdict = %s, want INCONCLUSIVE", f.Verdict)
+			}
+			return
+		}
+	}
+	t.Errorf("no finding on the carried call's inferred join; notes: %q", notes(tr))
 }

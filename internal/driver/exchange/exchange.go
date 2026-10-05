@@ -344,6 +344,27 @@ func (n *Conn) FaultEvent(kind transcript.EventKind, cs interpose.Case, detail m
 	n.event(transcript.Event{Kind: kind, Detail: detail, Fault: cs.TranscriptFault()})
 }
 
+// Applied records a fault taking effect on m, travelling dir. On a joined
+// face it carries the join m's exchange already has, so the reaction layer
+// can find the call a fault was carrying on the other face (ADR-015). It is
+// read, never made: a frame the fault kept from crossing joins nothing new.
+func (n *Conn) Applied(cs interpose.Case, verb string, m envelope.Message, dir transcript.Direction) {
+	e := transcript.Event{
+		Kind: transcript.FaultApplied, Detail: transcript.AppliedDetail(verb, dir),
+		Fault: cs.TranscriptFault(),
+	}
+	if n.face.join {
+		origin := dir
+		if m.Kind == envelope.KindResponse || m.Kind == envelope.KindError {
+			origin = dir.Opposite()
+		}
+		if link, ok := n.run().Ledger.LinkOf(n.face.face, n.connID, origin, m.ID); ok && link.Via != transcript.ViaNone {
+			e.Link = &link
+		}
+	}
+	n.event(e)
+}
+
 // Note records a harness annotation the oracle ignores.
 func (n *Conn) Note(text string) {
 	n.event(transcript.Event{Kind: transcript.Note, Detail: map[string]any{"harness": text}})

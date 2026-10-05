@@ -20,6 +20,8 @@ revisited.
 | ADR-011 | The reference peer is the Go SDK, pinned to a pre-release, seamed at bytes | Reference peer |
 | ADR-012 | One case armed per run under owned stimulus | Scenario player |
 | ADR-013 | A fault is put to its recipient, and judged by the recipient's reaction | Oracle |
+| ADR-014 | charpy stamps its notifications as well as its requests | Correlation |
+| ADR-015 | A gateway is judged downstream: the call a fault carried, then three questions | Oracle |
 
 ---
 
@@ -653,3 +655,85 @@ every message.
 **Revisit if.** A subject is found that rejects `_meta` on a notification
 -- which would be a conformance failure, and excluded by the precondition.
 
+---
+
+## ADR-015 — A gateway is judged downstream: the call a fault carried, then three questions
+
+**Question.** ADR-013 part 2 anchors the reaction layer at `fault_applied`
+and judges the subject's frames after it *on the same connection*. A
+gateway receives a fault on one face and is asked about it on the other:
+a cut on an upstream stream lands on `u0-c-1`, and the only questions
+charpy can put are on `d-c-1`. Asking `ping` alone, as charpy does of a
+server, does not reach the fault either -- `ping` is hop-by-hop, and a
+gateway answers it itself. What does charpy ask a gateway, and where?
+
+**Decision.** First, the call the fault was carrying. A fault on the
+upstream face lands on an exchange the gateway opened to serve a call of
+charpy's, asked downstream *before* the fault -- and what the gateway tells
+its client about that call is its handling of the fault itself: an error
+when its deadline fires, or nothing. `fault_applied` records the faulted
+frame's join in its `link`, read from the ledger rather than made, and the
+layer follows a traced join to charpy's downstream request and judges the
+gateway's answer to it. An inferred join is `INCONCLUSIVE`
+(`carried-call-join-inferred`): no verdict rests on one. No join means the
+exchange served none of charpy's calls -- a handshake, a listing the
+gateway made for itself -- and there is nothing carried to judge.
+
+Then, after a fault on either face, charpy's downstream client asks three
+questions, each with its own deadline and kept out of the
+matcher:
+
+1. `ping` -- is the gateway itself alive?
+2. a call through the upstream the fault reached -- does that path still
+   work: answered, an error, or a hang?
+3. a call through another upstream -- did the damage stay where it was
+   put?
+
+A downstream fault reached no upstream in particular, and the calls go
+through `u0` and `u1`. For a gateway, the layer judges charpy's downstream
+requests after the fault and the gateway's downstream answers to them, by
+id on their own connection, whatever face the fault was on. Each question's
+role is read off what it is: `ping`, or a call whose tool prefix (`uN_`)
+is, or is not, the fault's connection prefix (`uN-`). No new event kind
+records it. One `OBSERVED` finding per question; one still open when the
+run ends is a hang.
+
+The questions are asked even when the script ran out of time, which a
+server driver does not do: they run under the run's own context, and a
+gateway that hung its client's call is exactly what they exist to tell
+apart from a dead one.
+
+**Why.** Downstream, because that is the face the gateway's client sees,
+and the reaction worth judging is what the gateway tells its client. The
+answer is joined to its question by id on one connection, a fact, so no
+verdict rests on a join across the gateway. Three questions, because each
+separates a failure the others cannot: `cascade` (fixture plant) fails all
+three, a gateway that wedged one upstream fails only the second, and a
+gateway that crashed fails the first.
+
+No exemption is needed upstream. A case fires once (ADR-012), so the
+gateway's forwarded copy of a question cannot be faulted a second time.
+
+**Considered.** Recording each question's role in the transcript.
+Rejected: the role is derivable from what the question is, and a recorded
+role would be one more thing the transcript says that the frames could
+contradict.
+
+The carried call is what the questions cannot reach. `nodeadline`
+(fixture plant) shows only there: the carried call gets no answer until
+charpy's client gives up and cancels it, and the cancellation frees the
+gateway, so all three questions are answered exactly as for the control.
+A finding on a carried call that went unanswered says whether charpy's
+client cancelled it, and when.
+
+**Cost.** The roles lean on charpy's per-upstream tool prefixes, an open
+problem; replacing those replaces this. The carried call leans on the
+gateway forwarding charpy's trace: one that drops `_meta` gets an
+`INCONCLUSIVE` there, which is the honest result for a join that is only a
+guess. `fault_applied` grows a `link`, which event lines already carried
+as an optional field.
+
+**Supersedes.** ADR-013 part 2's "on the same connection", for gateways.
+
+**Revisit if.** A gateway forwards `ping` upstream, which would make the
+first question a second path question.

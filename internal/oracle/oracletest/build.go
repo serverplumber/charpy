@@ -27,13 +27,15 @@ type Builder struct {
 	face  transcript.Face
 	conn  string
 	rev   revision.Revision
+	link  transcript.Link
 }
 
 // New starts a transcript for a subject class.
 func New(t *testing.T, class transcript.Class) *Builder {
 	t.Helper()
 
-	b := &Builder{t: t, class: class, conn: "c-1", rev: revision.V20251125}
+	b := &Builder{t: t, class: class, conn: "c-1", rev: revision.V20251125,
+		link: transcript.Link{Via: transcript.ViaNone}}
 	b.face = transcript.Downstream
 	if class == transcript.ClassClient {
 		b.face = transcript.Upstream
@@ -66,6 +68,24 @@ func New(t *testing.T, class transcript.Class) *Builder {
 // Conn switches which connection subsequent frames belong to.
 func (b *Builder) Conn(id string) *Builder { b.conn = id; return b }
 
+// Face switches which of the subject's faces subsequent frames and events
+// are on; a gateway has two.
+func (b *Builder) Face(f transcript.Face) *Builder { b.face = f; return b }
+
+// Joined sets the join subsequent frames and fault events carry: id under
+// via, at a confidence below certainty when inferred. Joined("", "") clears
+// it.
+func (b *Builder) Joined(id string, via transcript.Via) *Builder {
+	b.link = transcript.Link{CharpyID: id, Via: via}
+	switch via {
+	case "":
+		b.link.Via = transcript.ViaNone
+	case transcript.ViaInferred:
+		b.link.Confidence = 0.9
+	}
+	return b
+}
+
 // Revision sets the revision subsequent frames say their face negotiated; ""
 // leaves it unsaid, as on a handshake request. The header stays 2025-11-25.
 func (b *Builder) Revision(r revision.Revision) *Builder { b.rev = r; return b }
@@ -79,7 +99,7 @@ func (b *Builder) Raw(dir transcript.Direction, raw string, fault *transcript.Fa
 		Face: b.face, Direction: dir, Transport: transcript.TransportStdio,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
 		Message: m, Revision: b.rev,
-		Link:  transcript.Link{Via: transcript.ViaNone},
+		Link:  b.link,
 		Fault: fault,
 	})
 	return b
@@ -93,7 +113,7 @@ func (b *Builder) RawHTTP(dir transcript.Direction, raw string, status int) *Bui
 		Face: b.face, Direction: dir, Transport: transcript.TransportHTTP,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
 		Message: m, Revision: b.rev,
-		Link: transcript.Link{Via: transcript.ViaNone},
+		Link: b.link,
 		HTTP: &transcript.HTTP{Status: status},
 	})
 	return b
@@ -131,15 +151,18 @@ func (b *Builder) Replacing(id envelope.ID, raw string) *Builder {
 	})
 }
 
+// A subject receives what travels toward it: client to server on the face a
+// client faces, server to client on the face a server faces. A server has
+// only the first, a client only the second, a gateway both.
 func (b *Builder) dirToSubject() transcript.Direction {
-	if b.class == transcript.ClassClient {
+	if b.face == transcript.Upstream {
 		return transcript.S2C
 	}
 	return transcript.C2S
 }
 
 func (b *Builder) dirFromSubject() transcript.Direction {
-	if b.class == transcript.ClassClient {
+	if b.face == transcript.Upstream {
 		return transcript.C2S
 	}
 	return transcript.S2C
@@ -154,7 +177,13 @@ func (b *Builder) FaultToSubject() *Builder { return b.applied(b.dirToSubject())
 func (b *Builder) FaultToCharpy() *Builder { return b.applied(b.dirFromSubject()) }
 
 func (b *Builder) applied(dir transcript.Direction) *Builder {
+	var link *transcript.Link
+	if b.link.Via != transcript.ViaNone {
+		l := b.link
+		link = &l
+	}
 	b.w.Event(transcript.Event{
+		Link: link,
 		Kind: transcript.FaultApplied, Face: b.face, Transport: transcript.TransportStdio,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
 		Detail: transcript.AppliedDetail("rewrite", dir),

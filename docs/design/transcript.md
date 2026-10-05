@@ -421,7 +421,7 @@ replaced only answers.
 | `stream_open` / `stream_close` | SSE stream or stdio pipe opened or closed | **Cancellation on 2026-07-28 HTTP**, truncation cases |
 | `subject_exit` | stdio subject process exited | Exit-code reporting, harness-vs-subject attribution |
 | `fault_scheduled` | Interposer selected a frame or moment for a fault | Case audit |
-| `fault_applied` | Fault took effect; `detail.direction` is the way its frame was travelling | The reaction layer's anchor; who the fault was put to |
+| `fault_applied` | Fault took effect; `detail.direction` is the way its frame was travelling; on a gateway's face, `link` is the faulted frame's join | The reaction layer's anchor; who the fault was put to; the call a gateway fault carried |
 | `fault_withdrawn` | Hang released, list restored, peer recovered | **Liveness clock starts here** |
 | `probe` | Liveness probe sent and its outcome | The reaction layer's recovery check |
 | `clock_advance` | Injected clock jumped | Replay determinism |

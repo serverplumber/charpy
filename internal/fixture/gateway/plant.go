@@ -72,8 +72,9 @@ func (s *session) planted(p Plant) bool { return slices.Contains(s.o.Plants, p) 
 
 // cascade is PlantCascade's teardown: with an upstream session gone, the
 // downstream one goes too. The close is not waited for -- the SDK waits for
-// in-flight handlers before it closes, and the caller may be one -- so the
-// call that failed is still answered, and nothing after it is.
+// in-flight handlers before it closes, and the caller may be one. Whether the
+// call that failed is still answered races the close, which can end its
+// response stream first; nothing after it is answered.
 func (s *session) cascade() {
 	if !s.planted(PlantCascade) {
 		return

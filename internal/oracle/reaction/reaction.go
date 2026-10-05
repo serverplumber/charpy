@@ -52,6 +52,10 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 		rep.Add(f)
 		return
 	}
+	if class == transcript.ClassGateway {
+		reactGateway(rep, t, applied, f)
+		return
+	}
 
 	// Walk what came after the fault. A question is a request the subject
 	// received untouched; an answer is the subject's own response to one. A

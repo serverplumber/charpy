@@ -31,9 +31,9 @@
 // request's join. No gateway verdict may rest on an inferred join
 // (transcript.md section 4).
 //
-// The script, the follow-up question and the recovery probe repeat what
-// proxy.Script does on purpose: a gateway's questions after a fault are going
-// to differ from a server's (G5), and one shared copy would have to serve both.
+// The script and the recovery probe repeat what proxy.Script does on
+// purpose, and the questions after a fault already differ: a server is asked
+// one, a gateway three (ADR-015).
 package gateway
 
 import (
@@ -50,6 +50,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/serverplumber/charpy/internal/clock"
 	"github.com/serverplumber/charpy/internal/driver/exchange"
@@ -309,12 +311,14 @@ func (d *Driver) Run(ctx context.Context) error {
 
 	scriptErr := d.script(sctx, sess)
 
-	// One question after the fault, on the same session, as proxy.Script
-	// asks it. A gateway's own questions after a fault are G5's.
-	if scenario.Askable(sctx, scriptErr) && d.down.Askable() {
-		withdraw := d.down.Ask(sess.ID(), transcript.C2S)
-		scenario.FollowUp(sctx, sess)
-		withdraw()
+	// Three questions after a fault on either face (ADR-015). A script that
+	// ran out of time still leaves them worth asking here: they run under the
+	// run's context with deadlines of their own, and a gateway that hung its
+	// client's call is the reaction they exist to tell apart from a dead one.
+	askable := scenario.Askable(sctx, scriptErr) ||
+		errors.Is(scenario.Why(sctx), scenario.ErrDeadline) && ctx.Err() == nil
+	if askable && d.anyApplied() {
+		d.questions(ctx, sess, timeout)
 	}
 	if d.o.Case.LivenessWithinMS > 0 && d.anyApplied() {
 		d.livenessProbe()
@@ -327,6 +331,57 @@ func (d *Driver) Run(ctx context.Context) error {
 		return scriptErr
 	}
 	return nil
+}
+
+// questions asks the gateway three things after a fault, on the session the
+// script used (ADR-015). A ping cannot ask about an upstream -- it is
+// hop-by-hop, and a gateway answers it itself -- so only a call that has to
+// travel can:
+//
+//   - ping: is the gateway itself alive?
+//   - a call through the upstream the fault reached: does that path still
+//     work -- answered, an error, or a hang?
+//   - a call through another upstream: did the damage stay where it was put?
+//
+// The upstream a fault reached is the one whose proxy applied it; a fault on
+// the downstream face reached no upstream, and the calls go through u0 and
+// u1 as they come. Each question has a deadline of its own, so a path that
+// hangs does not keep the healthy one from being asked; and each is kept out
+// of the matcher (exchange.Conn.Ask). The gateway's forwarded copy upstream
+// cannot be faulted either: a case fires once, and it already has.
+func (d *Driver) questions(ctx context.Context, sess *mcp.ClientSession, wait time.Duration) {
+	path, healthy := d.ups[0].name, ""
+	for _, u := range d.ups {
+		if u.proxy != nil && u.proxy.Askable() {
+			path = u.name
+			break
+		}
+	}
+	for _, u := range d.ups {
+		if u.name != path {
+			healthy = u.name
+			break
+		}
+	}
+
+	ask := func(q func(context.Context) error) {
+		qctx, cancel := context.WithTimeout(ctx, wait)
+		defer cancel()
+		withdraw := d.down.Ask(sess.ID(), transcript.C2S)
+		defer withdraw()
+		_ = q(qctx) // the transcript holds the answer, or its absence
+	}
+	call := func(upstream string) func(context.Context) error {
+		return func(c context.Context) error {
+			_, err := sess.CallTool(c, &mcp.CallToolParams{Name: upstream + "_echo", Arguments: map[string]any{}})
+			return err
+		}
+	}
+	ask(func(c context.Context) error { return sess.Ping(c, nil) })
+	ask(call(path))
+	if healthy != "" {
+		ask(call(healthy))
+	}
 }
 
 // anyApplied reports whether a fault acted on either face.

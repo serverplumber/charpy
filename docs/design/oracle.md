@@ -374,6 +374,25 @@ request carries no session id yet, so a fault on that response and the ping
 that follows it land on different connections. Keeping charpy's peer usable
 after a `c2s` fault destroys its own request is the next piece of work.
 
+**A gateway** receives a fault on one face and is asked about it on the
+other (ADR-015). An upstream fault lands on an exchange the gateway opened
+to serve a call of charpy's, asked downstream before the fault; the
+`fault_applied` event records that exchange's join, and the layer follows
+a traced one to charpy's call and judges what the gateway answered it --
+the gateway's handling of the fault itself, and the only place a missing
+deadline shows. A join inferred by content is `INCONCLUSIVE`,
+`carried-call-join-inferred`. After a fault on either face, charpy's downstream client
+asks three questions -- `ping`; a call through the upstream the fault
+reached; a call through another -- and the layer judges each by the
+gateway's downstream answer, by id on its own connection. A question's
+role is read off what it is: `ping`, or a call whose tool prefix (`uN_`)
+is or is not the fault's connection prefix (`uN-`); a downstream fault
+reached no upstream, and the calls are named by their upstream alone. Each
+gets its own `OBSERVED` finding -- answered, answered with an error and
+which, or still open at the end of the run -- beside an exit if the
+gateway left. Nothing asked downstream, and no carried call, is
+`nothing-asked-after-fault`, as for any subject.
+
 **The case-specific check, `expectation`,** judges what a case declares in
 `[case.expect]`, on the same anchor. `expect_error_code` looks for the
 subject's answer to the faulted request -- an error under its id, or under

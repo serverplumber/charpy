@@ -227,8 +227,8 @@ func (p *Proxy) faultContext(conn *exchange.Conn, m envelope.Message, dir transc
 
 // faultApplied records that a fault acted on a frame travelling dir, and hands
 // the session to the Applied hook. Callers hold p.faulting.
-func (p *Proxy) faultApplied(conn *exchange.Conn, c interpose.Case, verb interpose.Verb, dir transcript.Direction, resp *http.Response) {
-	conn.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(verb), dir))
+func (p *Proxy) faultApplied(conn *exchange.Conn, c interpose.Case, verb interpose.Verb, m envelope.Message, dir transcript.Direction, resp *http.Response) {
+	conn.Applied(c, string(verb), m, dir)
 	p.applied++
 	if p.o.Applied == nil || resp == nil {
 		return
@@ -360,7 +360,7 @@ func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose
 
 	resp, err := p.forward(r, send)
 	if err != nil {
-		p.faultApplied(conn, c, plan.Verb(), transcript.C2S, nil)
+		p.faultApplied(conn, c, plan.Verb(), m, transcript.C2S, nil)
 		release()
 		conn.Note(fmt.Sprintf("forwarding to subject: %v", err))
 		http.Error(w, "charpy: subject unreachable", http.StatusBadGateway)
@@ -374,7 +374,7 @@ func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose
 		p.inter.Synthesize(f, c, extra)
 		p.aside(r, extra.Raw(), att, conn)
 	}
-	p.faultApplied(conn, c, plan.Verb(), transcript.C2S, resp)
+	p.faultApplied(conn, c, plan.Verb(), m, transcript.C2S, resp)
 	release()
 
 	if p.o.AnswerDestroyed && m.Kind == envelope.KindRequest && sentAtt != nil &&
@@ -594,7 +594,7 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 	}
 	att := interpose.Crossed(c.Rewrote(m, *plan.Deliver), m, *plan.Deliver, true)
 	p.inter.Rewrite(conn.FrameOf(m, transcript.S2C), c, m, *plan.Deliver)
-	p.faultApplied(conn, c, plan.Verb(), transcript.S2C, resp)
+	p.faultApplied(conn, c, plan.Verb(), m, transcript.S2C, resp)
 	return att, *plan.Deliver, true
 }
 
@@ -604,6 +604,20 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) {
 	sse := wire.NewSSE(w)
 	sc := wire.NewSSEScanner(resp.Body)
+
+	// A held event leaves the stream open past the subject's own end of it:
+	// the client is waiting on an answer that has not come, and closing the
+	// stream would tell it the answer is not coming -- an error, not a hang.
+	var held *heldSSE
+	defer func() {
+		if held == nil {
+			return
+		}
+		select {
+		case <-held.w.Withdrawn():
+		case <-resp.Request.Context().Done():
+		}
+	}()
 
 	for sc.Scan() {
 		unit := sc.Unit()
@@ -636,9 +650,18 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 			continue
 		}
 
-		if p.faultSSE(sse, cases[0], m, unit, resp, prior, conn) {
+		end, h := p.faultSSE(sse, cases[0], m, unit, resp, prior, conn)
+		if end {
 			// then close: the stream ends here.
 			return
+		}
+		if h != nil {
+			held = h
+			// Held at a wider scope than the one response, nothing more
+			// crosses on this stream.
+			if h.scope != "" && h.scope != "response" {
+				return
+			}
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -646,32 +669,43 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 	}
 }
 
+// heldSSE is an event a hold withheld, and how much of its stream the hold
+// covers.
+type heldSSE struct {
+	w     *interpose.Withheld
+	scope string
+}
+
 // faultSSE applies a matched case to one event. It reports whether the stream
-// should end (a then=close). The verb dance mirrors the shim's; what differs
-// is delivery -- a cut lands in the subject's own event bytes, and synthesized
-// frames become events.
-func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) bool {
-	plan, ok := p.applySSE(sse, c, m, unit, resp, prior, conn)
+// should end (a then=close), and the hold if it withheld the event. The verb
+// dance mirrors the shim's; what differs is delivery -- a cut lands in the
+// subject's own event bytes, and synthesized frames become events.
+func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) (bool, *heldSSE) {
+	plan, w, ok := p.applySSE(sse, c, m, unit, resp, prior, conn)
 	if !ok {
-		return false
+		return false, nil
+	}
+	var held *heldSSE
+	if w != nil {
+		held = &heldSSE{w: w, scope: plan.Hold.Scope}
 	}
 
 	switch plan.Then {
 	case fault.StreamClose:
 		conn.StreamClose(transcript.CharpyClose, int(sse.Written()))
-		return true
+		return true, held
 	case fault.StreamStall:
 		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.wall()}); err != nil {
 			conn.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
 		}
 	}
-	return false
+	return false, held
 }
 
 // applySSE is faultSSE up to the fault_applied line, under p.faulting. The
 // stream action that follows is left outside it, because a stall lasts as long
 // as it lasts and nothing waiting on the lock should wait on that.
-func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) (fault.Plan, bool) {
+func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) (fault.Plan, *interpose.Withheld, bool) {
 	p.faulting.Lock()
 	defer p.faulting.Unlock()
 	conn.FaultEvent(transcript.FaultScheduled, c, nil)
@@ -680,10 +714,11 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 	if err != nil {
 		conn.Note(fmt.Sprintf("case %s not applied: %v", c.ID, err))
 		p.emitEvent(sse, unit, transcript.S2C, nil, resp, conn)
-		return plan, false
+		return plan, nil, false
 	}
 
 	f := conn.FrameOf(m, transcript.S2C)
+	var held *interpose.Withheld
 	att := c.TranscriptFault()
 
 	for _, extra := range plan.Before {
@@ -696,10 +731,11 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		p.inter.Swallow(f, c, m) // the event simply does not cross
 	case plan.Hold != nil:
 		// A held event over HTTP is the response stream going quiet with the
-		// frame undelivered. The stream stays open; the withdrawal, when it
-		// comes, is recorded but there is no later flush on this response --
-		// the client's request has already been answered by silence.
-		held := p.inter.Withhold(f, c, m, plan.Hold.For)
+		// frame undelivered. The stream stays open until the withdrawal
+		// (relaySSE); the withdrawal is recorded, but there is no later flush
+		// on this response -- the client's request has been answered by
+		// silence.
+		held = p.inter.Withhold(f, c, m, plan.Hold.For)
 		go p.releaseHold(held, plan.Hold, conn)
 	case plan.Cut != nil:
 		p.inter.Rewrite(f, c, m, m)
@@ -715,18 +751,15 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		p.emitEvent(sse, wire.EncodeEvent("message", extra.Raw(), ""), transcript.S2C, att, resp, conn)
 	}
 
-	p.faultApplied(conn, c, plan.Verb(), transcript.S2C, resp)
-	return plan, true
+	p.faultApplied(conn, c, plan.Verb(), m, transcript.S2C, resp)
+	return plan, held, true
 }
 
-// releaseHold records a withdrawal but, unlike the shim's release, cannot act
-// on hold.Then. Once charpy's handler has returned, the client's response is
-// closed, so a held frame has no open stream to be delivered or errored onto
-// after the fact -- "hold, then deliver later" needs the persistent pipe the
-// stdio path has and a one-shot HTTP response does not. No v0 HTTP case holds
-// (every hang case is gateway, face = upstream), so this is unexercised rather
-// than wrong; it is scoped in ../../../docs/open-problems.md so a hang case
-// made HTTP-runnable later does not silently drop its post-withdrawal frame.
+// releaseHold records a withdrawal but, unlike the shim's release, does not
+// yet act on hold.Then. relaySSE keeps the held stream open until this
+// moment, so the stream to deliver or error onto exists; writing to it from
+// here is the half not built, scoped in ../../../docs/open-problems.md so a
+// hang case that withdraws does not silently drop its post-withdrawal frame.
 func (p *Proxy) releaseHold(held *interpose.Withheld, hold *fault.Hold, conn *exchange.Conn) {
 	<-held.Withdrawn()
 	c := held.Case()

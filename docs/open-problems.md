@@ -169,18 +169,24 @@ client's response is closed, and a frame withdrawn afterwards has no open
 stream to arrive on. `releaseHold` records the withdrawal and drops the
 action, noting it in the transcript.
 
+Half of this is now closed. A held event keeps its SSE stream open until
+the withdrawal, or until the client goes away (`relaySSE`): before that,
+the handler relayed the rest of the subject's stream and returned, so a
+"hang" over HTTP reached the client as a stream that ended with no answer
+-- an error, which is a different question. The gateway's `nodeadline`
+control found it. What remains is writing the withdrawal's action onto
+that open stream.
+
 **Why it exists.** "Hold, then deliver later" assumes a persistent
 bidirectional channel. stdio is one; a Streamable HTTP POST response is a
 one-shot the server closes when it is done answering. The asymmetry is the
 transport's, not charpy's -- the same reason `interposer.md` §5.1 lists
 what survives relay differently per transport.
 
-**Why it is not closed for v0.** Nothing exercises it. The one `hang` case
-that runs today, `lifecycle/server-request-unanswered`, is stdio-only, and
-the other is a gateway case, which needs the gateway driver. The HTTP cases
-the proxy runs cut or corrupt rather than hold. So the gap is real but
-currently unreachable, and closing it speculatively would be inventing a
-delivery channel for a case that cannot yet arrive.
+**Why it is not closed for v0.** The trigger below has fired -- the gateway
+driver runs `gateway/upstream-credential-downstream`, a `hang` over HTTP
+-- but that case never withdraws early enough to matter, and no shipped
+HTTP case sets `then = "deliver"` or `"error"`.
 
 **What closing it would take.** A held-then-deliver over HTTP has to keep
 the response stream open past the point the subject stopped writing --
@@ -453,6 +459,10 @@ never declared is wrong on its face (I7). The alternative -- inferring the
 route from the gateway's own naming scheme -- trades stated structure for
 runtime guessing.
 
+The reaction layer leans on it too (ADR-015): which of charpy's questions
+to a gateway went through the upstream a fault reached is read off the
+called tool's prefix against the fault's connection prefix.
+
 **Why it is not closed for v0.** Nothing needs overlapping names yet, and
 I7 is not built.
 
@@ -460,7 +470,9 @@ I7 is not built.
 the connection it arrived on, which the connection prefix already does,
 and letting the tool names be whatever a case says they are -- including
 the same name on both upstreams, for the collision cases a real gateway
-has to handle.
+has to handle. The reaction layer would then read a question's upstream
+off the traced join from the downstream call to the upstream connection
+its forwarded copy arrived on, rather than off the tool's name.
 
 **Trigger to revisit.** The first case that needs two upstreams to declare
 the same name, or a gateway that rewrites tool names.
