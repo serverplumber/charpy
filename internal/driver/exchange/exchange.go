@@ -365,9 +365,15 @@ func (n *Conn) Applied(cs interpose.Case, verb string, m envelope.Message, dir t
 	n.event(e)
 }
 
-// Note records a harness annotation the oracle ignores.
+// Note records a harness annotation, which no verdict reads.
 func (n *Conn) Note(text string) {
 	n.event(transcript.Event{Kind: transcript.Note, Detail: map[string]any{"harness": text}})
+}
+
+// QuestionFailed notes that a follow-up question failed in charpy's own
+// client, with transcript.QuestionDetail.
+func (n *Conn) QuestionFailed(question string, err error) {
+	n.event(transcript.Event{Kind: transcript.Note, Detail: transcript.QuestionDetail(question, err)})
 }
 
 // StreamClose records a stream ending, with who closed it and how many bytes

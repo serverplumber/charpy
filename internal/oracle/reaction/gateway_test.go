@@ -1,6 +1,7 @@
 package reaction_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,6 +13,8 @@ import (
 // The three questions charpy puts to a gateway after a fault (ADR-015), and
 // their answers, on the downstream face.
 const (
+	gwInit     = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`
+	gwInitOK   = `{"jsonrpc":"2.0","id":1,"result":{}}`
 	gwPing     = `{"jsonrpc":"2.0","id":7,"method":"ping"}`
 	gwPingOK   = `{"jsonrpc":"2.0","id":7,"result":{}}`
 	gwPath     = `{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"u0_echo","arguments":{}}}`
@@ -24,11 +27,24 @@ const (
 
 // gatewayAfterUpstreamFault starts a gateway transcript whose fault reached
 // it on its upstream face, from upstream u0, and turns to the downstream face
-// where the questions are asked.
+// where the questions are asked, on the connection charpy's client opened
+// before it.
 func gatewayAfterUpstreamFault(t *testing.T) *oracletest.Builder {
+	return faultOn(t, "u0-1")
+}
+
+// faultOn is gatewayAfterUpstreamFault with the fault on upstream conn.
+func faultOn(t *testing.T, conn string) *oracletest.Builder {
 	return oracletest.New(t, transcript.ClassGateway).
-		Face(transcript.Upstream).Conn("u0-1").FaultToSubject().
+		Conn("d-1").ToSubject(gwInit).FromSubject(gwInitOK).
+		Face(transcript.Upstream).Conn(conn).FaultToSubject().
 		Face(transcript.Downstream).Conn("d-1")
+}
+
+// asked drops the findings for questions charpy never asked, for tests about
+// the ones it did.
+func asked(fs []oracle.Finding) []oracle.Finding {
+	return slices.DeleteFunc(fs, func(f oracle.Finding) bool { return f.Reason == "question-not-asked" })
 }
 
 // summaries is each finding's summary, in order.
@@ -73,14 +89,12 @@ func TestEachQuestionToAGatewayIsReportedByRole(t *testing.T) {
 // Which upstream the fault reached is the connection it applied on, so the
 // same calls swap roles when the fault was u1's.
 func TestTheFaultedUpstreamIsTheFaultsConnection(t *testing.T) {
-	tr := oracletest.New(t, transcript.ClassGateway).
-		Face(transcript.Upstream).Conn("u1-1").FaultToSubject().
-		Face(transcript.Downstream).Conn("d-1").
+	tr := faultOn(t, "u1-1").
 		ToSubject(gwPath).FromSubject(gwPathOK).
 		ToSubject(gwOther).FromSubject(gwOtherOK).
 		Done()
 
-	got := summaries(reactions(t, tr))
+	got := summaries(asked(reactions(t, tr)))
 	if len(got) != 2 ||
 		!strings.Contains(got[0], "u0 (an upstream the fault did not reach)") ||
 		!strings.Contains(got[1], "u1 (the upstream the fault reached)") {
@@ -151,24 +165,81 @@ func TestAGatewaysAnswerOnAnotherConnectionDoesNotCount(t *testing.T) {
 		Conn("d-2").FromSubject(gwPathOK).
 		Done()
 
-	if f := only(t, reactions(t, tr)); !strings.Contains(f.Summary, "did not answer") {
+	if f := only(t, asked(reactions(t, tr))); !strings.Contains(f.Summary, "did not answer") {
 		t.Errorf("summary = %q", f.Summary)
 	}
 }
 
 // Frames on the upstream face are the gateway's own traffic, not questions
-// charpy put to it, and a fault with nothing asked downstream after it is
-// inconclusive.
+// charpy put to it, so every question is reported as not asked.
 func TestUpstreamTrafficIsNotAQuestionToTheGateway(t *testing.T) {
 	tr := gatewayAfterUpstreamFault(t).
 		Face(transcript.Upstream).Conn("u0-1").
 		FromSubject(gwPath).ToSubject(gwPathOK).
 		Done()
 
-	f := only(t, reactions(t, tr))
-	if f.Verdict != oracle.Inconclusive || f.Reason != "nothing-asked-after-fault" {
-		t.Errorf("finding = %+v", f)
+	wantUnasked(t, reactions(t, tr),
+		"charpy did not ask the gateway a ping after the fault",
+		"charpy did not ask the gateway a call through u0 (the upstream the fault reached) after the fault")
+}
+
+// wantUnasked asserts fs is exactly the not-asked findings for want, in order.
+func wantUnasked(t *testing.T, fs []oracle.Finding, want ...string) {
+	t.Helper()
+	if got := summaries(fs); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("summaries:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
+	for _, f := range fs {
+		if f.Verdict != oracle.Inconclusive || f.Reason != "question-not-asked" {
+			t.Errorf("finding = %+v", f)
+		}
+	}
+}
+
+// A ping on a connection opened after the fault is charpy's liveness probe,
+// not a question: it cannot stand in for the ping the questions never sent.
+func TestAPingOnALaterConnectionIsNoQuestion(t *testing.T) {
+	tr := gatewayAfterUpstreamFault(t).
+		Conn("d-2").ToSubject(gwInit).FromSubject(gwInitOK).
+		ToSubject(gwPing).FromSubject(gwPingOK).
+		Done()
+
+	wantUnasked(t, reactions(t, tr),
+		"charpy did not ask the gateway a ping after the fault",
+		"charpy did not ask the gateway a call through u0 (the upstream the fault reached) after the fault")
+}
+
+// The driver's note on a question that failed without crossing is cited, so
+// the report says why it was not asked.
+func TestAnUnaskedQuestionCitesTheDriversNote(t *testing.T) {
+	tr := gatewayAfterUpstreamFault(t).
+		QuestionFailed("ping", "connection closed").
+		QuestionFailed("call through u1", "connection closed").
+		ToSubject(gwPath).FromSubject(gwPathOK).
+		Done()
+
+	fs := reactions(t, tr)
+	wantUnasked(t, fs[1:], "charpy did not ask the gateway a ping after the fault")
+	if !strings.HasSuffix(fs[1].Detail, "charpy's client: connection closed") || strings.Contains(fs[1].Detail, "u1") {
+		t.Errorf("detail = %q", fs[1].Detail)
+	}
+}
+
+// With two upstreams, an unasked call through the spared one is named.
+func TestAnUnaskedCallThroughTheSparedUpstreamIsNamed(t *testing.T) {
+	tr := gatewayAfterUpstreamFault(t).
+		Face(transcript.Upstream).Conn("u1-1").ToSubject(gwInit).
+		Face(transcript.Downstream).Conn("d-1").
+		ToSubject(gwPing).FromSubject(gwPingOK).
+		ToSubject(gwPath).FromSubject(gwPathOK).
+		Done()
+
+	fs := reactions(t, tr)
+	if len(fs) != 3 {
+		t.Fatalf("findings = %q", summaries(fs))
+	}
+	wantUnasked(t, fs[2:],
+		"charpy did not ask the gateway a call through u1 (an upstream the fault did not reach) after the fault")
 }
 
 // A gateway that exits on its own after the fault is reported, beside what
@@ -179,7 +250,7 @@ func TestAGatewayThatExitsIsReported(t *testing.T) {
 		SubjectExit(2).
 		Done()
 
-	got := summaries(reactions(t, tr))
+	got := summaries(asked(reactions(t, tr)))
 	if len(got) != 2 || got[0] != "the gateway exited after the fault" ||
 		!strings.Contains(got[1], "did not answer a ping") {
 		t.Errorf("summaries = %q", got)
@@ -225,7 +296,7 @@ func TestTheCarriedCallIsJudgedByItsJoin(t *testing.T) {
 		ToSubject(gwPing).FromSubject(gwPingOK).
 		Done()
 
-	fs := reactions(t, tr)
+	fs := asked(reactions(t, tr))
 	got := summaries(fs)
 	if len(got) != 2 || got[0] != "the gateway answered the call the fault was carrying (through u0) with an error" {
 		t.Fatalf("summaries = %q", got)
@@ -258,7 +329,7 @@ func TestACancellationOfAnotherIDIsNotTheCarriedCalls(t *testing.T) {
 		ToSubject(otherCancel).
 		Done()
 
-	f := only(t, reactions(t, tr))
+	f := only(t, asked(reactions(t, tr)))
 	if !strings.Contains(f.Detail, "still unanswered") {
 		t.Errorf("detail = %q", f.Detail)
 	}
@@ -271,20 +342,24 @@ func TestACarriedCallJoinedByContentIsInconclusive(t *testing.T) {
 		FromSubject(carriedErr).
 		Done()
 
-	f := only(t, reactions(t, tr))
+	f := only(t, asked(reactions(t, tr)))
 	if f.Verdict != oracle.Inconclusive || f.Reason != "carried-call-join-inferred" {
 		t.Errorf("finding = %+v", f)
 	}
 }
 
-// The carried call is something asked, so a fault followed by no questions
-// is not also reported as one after which nothing was asked.
-func TestACarriedCallAloneIsNotNothingAsked(t *testing.T) {
+// A judged carried call does not stand in for the questions: with none asked
+// after it, each is still reported as not asked.
+func TestACarriedCallDoesNotHideTheUnaskedQuestions(t *testing.T) {
 	tr := carrying(t, transcript.ViaTraced).
 		FromSubject(carriedErr).
 		Done()
 
-	if f := only(t, reactions(t, tr)); f.Verdict != oracle.Observed {
-		t.Errorf("finding = %+v", f)
+	fs := reactions(t, tr)
+	if len(fs) == 0 || fs[0].Verdict != oracle.Observed {
+		t.Fatalf("findings = %+v", fs)
 	}
+	wantUnasked(t, fs[1:],
+		"charpy did not ask the gateway a ping after the fault",
+		"charpy did not ask the gateway a call through u0 (the upstream the fault reached) after the fault")
 }

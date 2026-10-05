@@ -364,12 +364,18 @@ func (d *Driver) questions(ctx context.Context, sess *mcp.ClientSession, wait ti
 		}
 	}
 
-	ask := func(q func(context.Context) error) {
+	// The transcript holds each answer, or its absence. The error is noted
+	// too, because a question can fail without crossing at all -- a session
+	// charpy's client already gave up on fails it locally -- and then the
+	// note is the only record of why it was not asked.
+	ask := func(name string, q func(context.Context) error) {
 		qctx, cancel := context.WithTimeout(ctx, wait)
 		defer cancel()
 		withdraw := d.down.Ask(sess.ID(), transcript.C2S)
 		defer withdraw()
-		_ = q(qctx) // the transcript holds the answer, or its absence
+		if err := q(qctx); err != nil {
+			d.down.QuestionFailed(sess.ID(), name, err)
+		}
 	}
 	call := func(upstream string) func(context.Context) error {
 		return func(c context.Context) error {
@@ -377,10 +383,10 @@ func (d *Driver) questions(ctx context.Context, sess *mcp.ClientSession, wait ti
 			return err
 		}
 	}
-	ask(func(c context.Context) error { return sess.Ping(c, nil) })
-	ask(call(path))
+	ask("ping", func(c context.Context) error { return sess.Ping(c, nil) })
+	ask("call through "+path, call(path))
 	if healthy != "" {
-		ask(call(healthy))
+		ask("call through "+healthy, call(healthy))
 	}
 }
 

@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"context"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -337,8 +338,10 @@ func TestACallJoinsInferredWhenTheGatewayDropsTheTrace(t *testing.T) {
 }
 
 // answers is the reaction oracle's account of the call the fault was carrying
-// and the three questions, keyed by role: "carried", "ping", "u0", "u1". Each is what the gateway did -- "answered",
-// "error" or "hang" -- and every finding must be OBSERVED.
+// and the three questions, keyed by role: "carried", "ping", "u0", "u1". Each
+// is what the gateway did -- "answered", "error" or "hang" -- or "unasked"
+// for a question charpy never got to put; every other finding must be
+// OBSERVED.
 func answers(t *testing.T, tr *transcript.Transcript) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -346,31 +349,45 @@ func answers(t *testing.T, tr *transcript.Transcript) map[string]string {
 		if f.Check != "reaction" {
 			continue
 		}
+		if f.Reason == "question-not-asked" {
+			out[role(f.Summary)] = "unasked"
+			continue
+		}
 		if f.Verdict != oracle.Observed {
 			t.Errorf("%s: %q (%s); notes: %q", f.Verdict, f.Summary, f.Reason, notes(tr))
 			continue
 		}
-		role := "ping"
-		for _, u := range []string{"u0", "u1"} {
-			if strings.Contains(f.Summary, "through "+u) {
-				role = u
-			}
-		}
-		if strings.Contains(f.Summary, "the call the fault was carrying") {
-			role = "carried"
-		}
+		r := role(f.Summary)
 		switch {
 		case strings.Contains(f.Summary, "exited"):
-			role, out["exit"] = "exit", "exited"
+			out["exit"] = "exited"
 		case strings.Contains(f.Summary, "did not answer"):
-			out[role] = "hang"
+			out[r] = "hang"
 		case strings.Contains(f.Summary, "with an error"):
-			out[role] = "error"
+			out[r] = "error"
 		default:
-			out[role] = "answered"
+			out[r] = "answered"
 		}
 	}
 	return out
+}
+
+// role is the role a reaction finding's summary names: "carried", "ping",
+// the upstream a call went through, or "other" for anything else -- a call
+// through an upstream left unnamed, or an exit.
+func role(summary string) string {
+	switch {
+	case strings.Contains(summary, "the call the fault was carrying"):
+		return "carried"
+	case strings.Contains(summary, "a ping"):
+		return "ping"
+	}
+	for _, u := range []string{"u0", "u1"} {
+		if strings.Contains(summary, "through "+u+" ") {
+			return u
+		}
+	}
+	return "other"
 }
 
 func wantAnswers(t *testing.T, tr *transcript.Transcript, want map[string]string) {
@@ -398,7 +415,8 @@ func TestAGatewayAnswersAllThreeAfterAnUpstreamCut(t *testing.T) {
 
 // cascade ends the downstream session with the upstream one. The ping that
 // follows goes unanswered, and the calls never cross at all: charpy's client
-// has already seen its session end, so only the ping is judged. Whether the
+// has already seen its session end, so only the ping is judged and both
+// calls are reported as not asked. Whether the
 // cut call is answered with an error first races the plant's close, so either
 // is accepted -- but it is judged, on its traced join.
 func TestACascadingGatewayAnswersNothingAfterAnUpstreamCut(t *testing.T) {
@@ -408,8 +426,9 @@ func TestACascadingGatewayAnswersNothingAfterAnUpstreamCut(t *testing.T) {
 		t.Errorf("carried: %q, want an error or a hang (all: %v)", c, got)
 	}
 	delete(got, "carried")
-	if len(got) != 1 || got["ping"] != "hang" {
-		t.Errorf("questions judged: %v, want only ping, unanswered", got)
+	want := map[string]string{"ping": "hang", "u0": "unasked", "u1": "unasked"}
+	if !maps.Equal(got, want) {
+		t.Errorf("questions: %v, want %v", got, want)
 	}
 }
 
@@ -463,4 +482,36 @@ func TestACarriedCallThroughAStrippingGatewayIsInconclusive(t *testing.T) {
 		}
 	}
 	t.Errorf("no finding on the carried call's inferred join; notes: %q", notes(tr))
+}
+
+// metastrip passes the cut stream through, which ends charpy's client's
+// session, so none of the questions crosses. Each is reported as not asked,
+// citing the driver's note on why; none is judged, and the liveness probe's
+// ping on its own connection does not stand in for the question's.
+func TestQuestionsAStrippingGatewayNeverGotAreReportedUnasked(t *testing.T) {
+	tr := driveWith(t, shipped(t, "stream/truncate-mid-event"), 10*time.Second, func(addr string) []string {
+		return []string{metastrip, "-http", addr, "-upstream", "{upstream0}"}
+	})
+	unasked := map[string]bool{}
+	for _, f := range reaction.Check(tr).Findings {
+		if f.Check != "reaction" {
+			continue
+		}
+		switch r := role(f.Summary); {
+		case r == "carried":
+		case f.Reason != "question-not-asked":
+			t.Errorf("%s judged: %s %q", r, f.Verdict, f.Summary)
+		default:
+			if f.Verdict != oracle.Inconclusive {
+				t.Errorf("%s: verdict %s, want INCONCLUSIVE", r, f.Verdict)
+			}
+			if !strings.Contains(f.Detail, "charpy's client: ") {
+				t.Errorf("%s: detail %q cites no note from the driver", r, f.Detail)
+			}
+			unasked[r] = true
+		}
+	}
+	if !unasked["ping"] || !unasked["u0"] || len(unasked) != 2 {
+		t.Errorf("unasked: %v, want ping and u0; notes: %q", unasked, notes(tr))
+	}
 }

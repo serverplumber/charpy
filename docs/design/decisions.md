@@ -698,6 +698,21 @@ is, or is not, the fault's connection prefix (`uN-`). No new event kind
 records it. One `OBSERVED` finding per question; one still open when the
 run ends is a hang.
 
+Only a downstream connection open at the fault carries a question. The
+questions are asked on the script's own session, so a connection first
+seen after the fault is the liveness probe's, and its ping is the recovery
+check's to judge. Counting it here once let the probe stand in for a ping
+the questions never sent.
+
+A question not asked is `INCONCLUSIVE`, `question-not-asked`, one finding
+per role, whether or not a carried call was judged: a report silent about
+a call reads the same as a gateway nobody needed to ask. A gateway that
+passes a broken upstream stream through ends charpy's client's session,
+and the questions then fail in charpy's client without crossing. The
+driver notes each such failure with the question and the error as keys of
+their own (`transcript.QuestionDetail`), and the finding cites it -- in its
+detail, never in its verdict.
+
 The questions are asked even when the script ran out of time, which a
 server driver does not do: they run under the run's own context, and a
 gateway that hung its client's call is exactly what they exist to tell

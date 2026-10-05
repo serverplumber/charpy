@@ -200,6 +200,20 @@ func AppliedDetail(verb string, dir Direction) map[string]any {
 	return map[string]any{"verb": verb, "direction": string(dir)}
 }
 
+// QuestionDetail builds the detail of a note recording a follow-up question
+// that failed in charpy's own client: "harness" for a reader, as on any note,
+// and the question and the error as keys of their own. A question that fails
+// without crossing leaves no frame, so this note is the only record of why it
+// was not asked. The reaction layer cites it in a finding's detail and never
+// in a verdict.
+func QuestionDetail(question string, err error) map[string]any {
+	return map[string]any{
+		"harness":  fmt.Sprintf("question %s: %v", question, err),
+		"question": question,
+		"error":    err.Error(),
+	}
+}
+
 // ProbeDetail builds the detail a probe event must carry. Liveness is
 // computed from these outcomes.
 func ProbeDetail(method string, outcome ProbeOutcome, elapsed clock.Mono) map[string]any {

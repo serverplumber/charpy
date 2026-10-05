@@ -9,6 +9,7 @@ package oracletest
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -213,6 +214,17 @@ func (b *Builder) SubjectExit(code int) *Builder {
 		Kind: transcript.SubjectExit, Face: b.face, Transport: transcript.TransportStdio,
 		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
 		Detail: map[string]any{"exit_code": code},
+	})
+	return b
+}
+
+// QuestionFailed records, on the current connection, the note a driver
+// writes when a follow-up question fails in charpy's own client.
+func (b *Builder) QuestionFailed(question, why string) *Builder {
+	b.w.Event(transcript.Event{
+		Kind: transcript.Note, Face: b.face, Transport: transcript.TransportStdio,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Detail: transcript.QuestionDetail(question, errors.New(why)),
 	})
 	return b
 }

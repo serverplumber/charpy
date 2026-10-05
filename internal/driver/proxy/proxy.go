@@ -195,6 +195,12 @@ func (p *Proxy) Note(sessionID, text string) {
 	p.connFor(sessionID).Note(text)
 }
 
+// QuestionFailed notes on sessionID's connection that a follow-up question
+// failed in charpy's own client (exchange.Conn.QuestionFailed).
+func (p *Proxy) QuestionFailed(sessionID, question string, err error) {
+	p.connFor(sessionID).QuestionFailed(question, err)
+}
+
 // Askable reports whether a fault has acted in this run, so that a follow-up
 // question has something to follow. It waits out a fault still being applied.
 //

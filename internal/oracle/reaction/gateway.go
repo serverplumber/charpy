@@ -3,6 +3,8 @@ package reaction
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/serverplumber/charpy/internal/envelope"
@@ -30,6 +32,13 @@ import (
 // upstream into an error, or none -- and it is found by the join the
 // fault_applied event records. Only a traced join is a fact; an inferred one
 // is said, and judged no further.
+//
+// A question is only one asked on a downstream connection open by the time
+// of the fault. A connection opened after it is charpy's liveness probe,
+// whose ping is the recovery check's, not the reaction's; counting it here
+// once let a probe stand in for a ping the questions never sent. And a role
+// with no question asked is said, not left out: a report missing a call
+// reads the same as a gateway nobody needed to ask.
 //
 // The upstream a fault reached is the prefix of the connection it applied on
 // (u0-, u1-), and a tool's upstream is its own prefix (u0_, u1_). Both lean
@@ -59,12 +68,32 @@ func reactGateway(rep *oracle.Report, t *transcript.Transcript, applied *transcr
 		byKey   = map[string]*question{}
 		answers = map[*question]*transcript.FrameLine{}
 		exited  *transcript.EventLine
+		notes   = map[string]string{}
 		last    = applied.TMonoNS
+		open    = map[string]bool{}
+		ups     = map[string]bool{}
 	)
 	for i := range t.Entries {
 		en := &t.Entries[i]
+		face, id := entryConn(en)
+		if face == transcript.Upstream {
+			if pre, _, ok := strings.Cut(id, "-"); ok {
+				ups[pre] = true
+			}
+		}
 		if en.Seq <= applied.Seq {
+			if face == transcript.Downstream && id != "" {
+				open[id] = true
+			}
 			continue
+		}
+		if e := en.Event; e != nil && e.EventKind == transcript.Note && face == transcript.Downstream {
+			// A question that failed in charpy's client (transcript.QuestionDetail).
+			name, _ := e.Detail["question"].(string)
+			why, _ := e.Detail["error"].(string)
+			if name != "" && why != "" {
+				notes[name] = why
+			}
 		}
 		last = en.TMonoNS
 		if e := en.Event; e != nil && e.EventKind == transcript.SubjectExit {
@@ -74,11 +103,10 @@ func reactGateway(rep *oracle.Report, t *transcript.Transcript, applied *transcr
 			continue
 		}
 		fr := en.Frame
-		if fr == nil || fr.Face != transcript.Downstream || fr.Tampered() {
+		if fr == nil || fr.Face != transcript.Downstream || fr.Tampered() || !open[conn(fr)] {
 			continue
 		}
-		// Ids are scoped to a connection, and a gateway that dropped its
-		// client is reconnected to on a new one.
+		// Ids are scoped to a connection.
 		if fr.Key() == "" {
 			continue
 		}
@@ -115,18 +143,7 @@ func reactGateway(rep *oracle.Report, t *transcript.Transcript, applied *transcr
 		f.Detail = fmt.Sprintf("%s, %s after the fault", exitText(exited.Detail), ms(exited.TMonoNS-applied.TMonoNS))
 		rep.Add(f)
 	}
-	judged := carried(rep, t, applied, base, faulted)
-	if len(asked) == 0 {
-		if judged {
-			return
-		}
-		f := base
-		f.Verdict = oracle.Inconclusive
-		f.Summary = "nothing asked the gateway anything after the fault"
-		f.Reason = "nothing-asked-after-fault"
-		rep.Add(f)
-		return
-	}
+	carried(rep, t, applied, base, faulted)
 
 	for _, q := range asked {
 		f := base
@@ -152,16 +169,98 @@ func reactGateway(rep *oracle.Report, t *transcript.Transcript, applied *transcr
 		}
 		rep.Add(f)
 	}
+
+	for _, m := range unasked(asked, faulted, ups) {
+		f := base
+		f.Verdict = oracle.Inconclusive
+		f.Summary = "charpy did not ask the gateway " + m.what + " after the fault"
+		f.Detail = "no such request crossed downstream on a connection open at the fault"
+		if why, ok := notes[m.name]; ok {
+			f.Detail += "; charpy's client: " + why
+		}
+		f.Reason = "question-not-asked"
+		rep.Add(f)
+	}
+}
+
+// missing is a question not asked: what to call it in a finding, and the
+// name the driver notes it under, "" when it is not one upstream in
+// particular.
+type missing struct{ what, name string }
+
+// unasked names each question the driver puts to a gateway (ADR-015) that
+// was not asked: a ping; after an upstream fault, a call through the
+// upstream it reached and one through another, if there is another; after a
+// downstream fault, calls through two upstreams, or the one there is. ups is
+// every upstream the transcript shows, by connection prefix; it is not
+// changed.
+func unasked(asked []*question, faulted string, ups map[string]bool) []missing {
+	ups = maps.Clone(ups)
+	pinged, through := false, map[string]bool{}
+	for _, q := range asked {
+		switch {
+		case q.upstream != "":
+			through[q.upstream] = true
+			ups[q.upstream] = true
+		case q.frame.MethodName() == "ping":
+			pinged = true
+		}
+	}
+	if faulted != "" {
+		ups[faulted] = true
+	}
+	names := slices.Sorted(maps.Keys(ups))
+
+	var out []missing
+	if !pinged {
+		out = append(out, missing{"a ping", "ping"})
+	}
+	if faulted != "" {
+		if !through[faulted] {
+			out = append(out, missing{"a call through " + faulted + " (the upstream the fault reached)", "call through " + faulted})
+		}
+		others := slices.DeleteFunc(names, func(u string) bool { return u == faulted })
+		if len(others) > 0 && !slices.ContainsFunc(others, func(u string) bool { return through[u] }) {
+			m := missing{what: "a call through an upstream the fault did not reach"}
+			if len(others) == 1 {
+				m = missing{"a call through " + others[0] + " (an upstream the fault did not reach)", "call through " + others[0]}
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+	need := min(2, len(names)) - len(through)
+	for _, u := range names {
+		if need <= 0 {
+			break
+		}
+		if !through[u] {
+			out = append(out, missing{"a call through " + u, "call through " + u})
+			need--
+		}
+	}
+	return out
+}
+
+// entryConn is the face and connection an entry is on, frame or event.
+func entryConn(en *transcript.Entry) (transcript.Face, string) {
+	switch {
+	case en.Frame != nil:
+		return en.Frame.Face, conn(en.Frame)
+	case en.Event != nil && en.Event.Face != nil && en.Event.ConnID != nil:
+		return *en.Event.Face, *en.Event.ConnID
+	}
+	return "", ""
 }
 
 // carried reports what the gateway told charpy's client about the call an
-// upstream fault was carrying, and whether there was one to judge.
-func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.EventLine, base oracle.Finding, faulted string) bool {
+// upstream fault was carrying, if there was one.
+func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.EventLine, base oracle.Finding, faulted string) {
 	if applied.Face == nil || *applied.Face != transcript.Upstream ||
 		applied.Link == nil || applied.Link.CharpyID == nil {
 		// Downstream, the faulted frame is charpy's call itself; upstream with
 		// no join, the exchange served none of charpy's calls.
-		return false
+		return
 	}
 	what := "the call the fault was carrying"
 	if faulted != "" {
@@ -174,7 +273,7 @@ func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.E
 		f.Detail = "the gateway did not forward charpy's trace, and no verdict rests on an inferred join"
 		f.Reason = "carried-call-join-inferred"
 		rep.Add(f)
-		return true
+		return
 	}
 	id := *applied.Link.CharpyID
 
@@ -202,7 +301,7 @@ func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.E
 		}
 	}
 	if call == nil {
-		return false
+		return
 	}
 
 	f.Verdict = oracle.Observed
@@ -229,7 +328,6 @@ func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.E
 			call.Seq, answer.Seq, ms(answer.TMonoNS-applied.TMonoNS))
 	}
 	rep.Add(f)
-	return true
 }
 
 // cancels reports whether fr is a notifications/cancelled naming call.

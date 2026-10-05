@@ -425,7 +425,7 @@ replaced only answers.
 | `fault_withdrawn` | Hang released, list restored, peer recovered | **Liveness clock starts here** |
 | `probe` | Liveness probe sent and its outcome | The reaction layer's recovery check |
 | `clock_advance` | Injected clock jumped | Replay determinism |
-| `note` | Free-text harness annotation | Debugging only; oracle ignores |
+| `note` | Free-text harness annotation in `detail.harness`; a follow-up question that failed in charpy's client also carries `detail.question` and `detail.error` | Debugging; no verdict reads a note, and the reaction layer cites a failed question's in a finding's detail |
 
 `stream_close.detail.reason` distinguishes `peer_close`, `charpy_close`,
 `timeout`, `error` and `subject_close`. The cancellation invariant on
