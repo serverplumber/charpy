@@ -22,6 +22,7 @@ revisited.
 | ADR-013 | A fault is put to its recipient, and judged by the recipient's reaction | Oracle |
 | ADR-014 | charpy stamps its notifications as well as its requests | Correlation |
 | ADR-015 | A gateway is judged downstream: the call a fault carried, then three questions | Oracle |
+| ADR-016 | Whether a run can reach a case's frame is derived from the matcher | Scenario player |
 
 ---
 
@@ -752,3 +753,40 @@ as an optional field.
 
 **Revisit if.** A gateway forwards `ping` upstream, which would make the
 first question a second path question.
+
+## ADR-016 — Whether a run can reach a case's frame is derived from the matcher
+
+**Question.** A case can apply to a run by revision, transport, subject
+class and observer, and still select a frame nothing in the run sends.
+Behind a gateway, `manifest/mutate-silent` waits for an upstream
+`list_changed` that charpy's reference servers never send, and
+`capability-narrowed-on-reconnect` for a second upstream handshake that
+nothing provokes. Both passed selection and were refused when the driver
+was built, mid-run: the run exited 2 and left an empty transcript. Where
+is that decided, and from what?
+
+**Decision.** At selection, from the case's `[case.match]`.
+`scenario.Reaches` states who sends what for each scripted subject class --
+charpy's script and the subject's answers downstream; behind a gateway,
+also the gateway's forwards and charpy's upstreams' answers -- and a case
+whose frame no sender reaches is dropped like an out-of-revision one. A
+glob that names it says why. Drivers call the same function when built, so
+nothing passes one check and fails the other. A client subject drives its
+own traffic, so nothing is ruled out for it.
+
+**Why.** The matcher already says what traffic a case needs, and the script
+is derived from it for the same reason (ADR-012): a second statement could
+drift from the first. A refusal at build is the wrong place for an
+applicability fact -- it costs a spawned subject and a transcript, and
+reads as a harness failure.
+
+**Considered.** A declared field on the case (`needs = [...]`). Rejected:
+it repeats `[case.match]`, and the one need the matcher cannot show --
+whether a tool samples -- is the run's `--tool`, not the case's. Whether a
+pair is reachable depends on the setup as much as the case: the same
+`capability-narrowed-on-reconnect` is reachable against a client over
+HTTP, where the reconnect is the client's own.
+
+**Revisit if.** A setup gains a sender the table does not know -- an
+upstream script, a reconnecting upstream -- which adds rows rather than
+changing the rule.

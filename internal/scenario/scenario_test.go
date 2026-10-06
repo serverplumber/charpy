@@ -2,8 +2,6 @@ package scenario_test
 
 import (
 	"context"
-	"errors"
-	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -100,22 +98,6 @@ func TestNothingIsSentBeyondWhatTheCaseNeeds(t *testing.T) {
 	}
 	if len(calls) != 2 {
 		t.Errorf("originated %v, want exactly two calls", calls)
-	}
-}
-
-// A case selecting on a method nothing here originates must say so at
-// construction. Running anyway would report UNTRIGGERED, which is
-// indistinguishable from a subject that behaved.
-func TestAnUnoriginatableMethodIsRefusedUpFront(t *testing.T) {
-	_, err := scenario.Basic(
-		interpose.Match{Method: interpose.ParseGlob("resources/subscribe")},
-		scenario.Options{},
-	)
-	if !errors.Is(err, scenario.ErrCannotOriginate) {
-		t.Fatalf("err = %v, want ErrCannotOriginate", err)
-	}
-	if !strings.Contains(err.Error(), "resources/subscribe") {
-		t.Errorf("error does not name the method: %v", err)
 	}
 }
 

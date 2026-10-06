@@ -22,13 +22,13 @@ import (
 // error as a problem.
 type Scenario func(ctx context.Context, sess *mcp.ClientSession) error
 
-// ErrCannotOriginate is returned when a case's matcher selects on traffic no
-// scenario in this package knows how to produce.
+// ErrUnreachable is returned when a case's matcher selects on a frame nothing
+// in the run's setup ever sends.
 //
-// It names the method rather than silently running a script the fault can
+// It names the frame rather than silently running a script the fault can
 // never attach to, which would report UNTRIGGERED and look like a subject
 // that behaved.
-var ErrCannotOriginate = errors.New("scenario: nothing here originates that method")
+var ErrUnreachable = errors.New("scenario: nothing here sends that frame")
 
 // ErrStimulusInterrupted wraps a call that did not complete because the wire
 // broke under it -- which, under a fault, is the fault working.
@@ -84,19 +84,11 @@ type Options struct {
 // its seeded one -- and inventing a seeded draw nothing consumes would make
 // the archived-citation contract in case-identity.md section 5 harder to keep
 // for no gain.
+//
+// Whether the matcher's frame is one this script can ever bring about is not
+// Basic's to check: [Reaches] answers it for the whole setup, at selection
+// and again where a driver is built.
 func Basic(m interpose.Match, o Options) (Scenario, error) {
-	method := m.Method.String()
-	switch method {
-	case "", "*", "tools/call":
-	case "sampling/createMessage":
-		// The server asks this of its client, inside a call; charpy's peer
-		// cannot send it, but calling a tool that samples provokes it, and
-		// the case's matcher lands on the peer's answer. Which tool samples
-		// is the subject's to say, so the run names it with --tool.
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrCannotOriginate, method)
-	}
-
 	repeats := o.Repeats
 	if repeats == 0 {
 		repeats = Repeats(m)

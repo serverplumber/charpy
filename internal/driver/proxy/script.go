@@ -73,6 +73,9 @@ func NewScript(o ScriptOptions) (*Script, error) {
 
 	run := o.Scenario
 	if run == nil {
+		if err := scenario.Reaches(o.Case.Match, transcript.ClassServer); err != nil {
+			return nil, err
+		}
 		run, err = scenario.Basic(o.Case.Match, o.Stimulus)
 		if err != nil {
 			return nil, err

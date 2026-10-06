@@ -206,6 +206,10 @@ type config struct {
 	// than claim the case does not apply.
 	unobservable []catalogue.Case
 
+	// unreachable is the cases dropped at selection only because nothing this
+	// run stands up sends the frame they select on, each with the reason.
+	unreachable []unreached
+
 	// byRevision is what an auto run arms, keyed by the revision the
 	// handshake may settle on, each case compiled against that revision so
 	// its citation names it. Compiled here rather than at settlement so a
@@ -308,17 +312,32 @@ func runConfig(rev, seedFlag, class, transport string) (config, int) {
 		return config{}, exitHarness
 	}
 	for _, cs := range cat.Applicable(cfg.revision) {
-		if cs.SupportsTransport(transport) && cs.SupportsSubject(class) && !cs.ObservableBy(observers...) {
+		if !cs.SupportsTransport(transport) || !cs.SupportsSubject(class) {
+			continue
+		}
+		if !cs.ObservableBy(observers...) {
 			cfg.unobservable = append(cfg.unobservable, cs)
+			continue
+		}
+		if why := reaches(cs, cfg.revision, cfg.seed, class); why != nil {
+			cfg.unreachable = append(cfg.unreachable, unreached{cs.ID, why})
 		}
 	}
 	return cfg, exitClean
 }
 
-// explainUnobservable says which cases a glob would have selected but that no
-// observer here can judge, so a refusal names the reason instead of claiming
-// the case does not apply to the run.
-func explainUnobservable(cfg config, glob string) {
+// unreached is a case dropped at selection because nothing the run stands up
+// sends its frame, and why.
+type unreached struct {
+	id  string
+	why error
+}
+
+// explainDropped says which cases a glob would have selected but that this run
+// dropped -- no observer here can judge them, or nothing here sends their
+// frame -- so a refusal names the reason instead of claiming the case does
+// not apply to the run.
+func explainDropped(cfg config, glob string) {
 	g := interpose.ParseGlob(glob)
 	for _, cs := range cfg.unobservable {
 		if glob == "" || g.Match(cs.ID) {
@@ -327,6 +346,22 @@ func explainUnobservable(cfg config, glob string) {
 				cs.ID, strings.Join(cs.ObservedBy, " or "), strings.Join(observers, ", "))
 		}
 	}
+	for _, u := range cfg.unreachable {
+		if glob == "" || g.Match(u.id) {
+			fmt.Fprintf(os.Stderr, "charpy run: %s applies, but %v\n", u.id, u.why)
+		}
+	}
+}
+
+// reaches compiles a case for the revision and asks whether a run of this
+// class ever sends the frame it selects on. A case that does not compile is
+// left for selectFor to report.
+func reaches(cs catalogue.Case, r revision.Revision, seed, class string) error {
+	compiled, err := cs.Compile(r, seed)
+	if err != nil {
+		return nil
+	}
+	return scenario.Reaches(compiled.Match, transcript.Class(class))
 }
 
 // observers is what every driver can judge a case's answer by today: what
@@ -334,12 +369,13 @@ func explainUnobservable(cfg config, glob string) {
 var observers = []string{"wire"}
 
 // selectFor compiles the cases a run will arm: those active for the revision,
-// runnable on the transport, applicable to the subject class, and observable
-// by something the run has. All four are applicability, like the revision
-// range -- a stdio-only case armed on an HTTP run, a server case armed on a
-// client run, or a case whose answer nothing here can see could only report
-// UNTRIGGERED, test the wrong side, or fire with nobody watching -- so each is
-// dropped at selection the same way an out-of-revision case is.
+// runnable on the transport, applicable to the subject class, observable by
+// something the run has, and selecting a frame something in the run sends.
+// All five are applicability, like the revision range -- a stdio-only case
+// armed on an HTTP run, a server case armed on a client run, a case whose
+// answer nothing here can see, or one whose frame nothing here sends could
+// only report UNTRIGGERED, test the wrong side, or fire with nobody watching
+// -- so each is dropped at selection the same way an out-of-revision case is.
 func selectFor(cat *catalogue.Catalogue, r revision.Revision, seed, transport, class string) ([]interpose.Case, error) {
 	var out []interpose.Case
 	for _, cs := range cat.Applicable(r) {
@@ -349,6 +385,9 @@ func selectFor(cat *catalogue.Catalogue, r revision.Revision, seed, transport, c
 		compiled, err := cs.Compile(r, seed)
 		if err != nil {
 			return nil, err
+		}
+		if scenario.Reaches(compiled.Match, transcript.Class(class)) != nil {
+			continue
 		}
 		out = append(out, compiled)
 	}
@@ -539,7 +578,7 @@ func scripted(command []string, cfg config, glob, outDir string, noRedact bool, 
 		// A selection that matches nothing is a run that passes by not
 		// running, which is the failure mode the loader exists to prevent.
 		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to %s\n", glob, cfg.revision)
-		explainUnobservable(cfg, glob)
+		explainDropped(cfg, glob)
 		return exitHarness
 	}
 
@@ -658,7 +697,7 @@ func httpScripted(url string, cfg config, glob, outDir string, noRedact bool, ou
 	selected := matching(cfg.cases, glob)
 	if len(selected) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to %s\n", glob, cfg.revision)
-		explainUnobservable(cfg, glob)
+		explainDropped(cfg, glob)
 		return exitHarness
 	}
 
@@ -746,7 +785,7 @@ func gatewayScripted(command []string, url string, cfg config, glob, outDir stri
 	selected := matching(cfg.cases, glob)
 	if len(selected) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no case matching %q applies to a gateway at %s\n", glob, cfg.revision)
-		explainUnobservable(cfg, glob)
+		explainDropped(cfg, glob)
 		return exitHarness
 	}
 
@@ -843,7 +882,7 @@ func hostileRun(cfg config, glob, outDir string, noRedact bool, out io.Writer) i
 	}
 	if len(cases) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no client case applies to %s\n", cfg.revision)
-		explainUnobservable(cfg, glob)
+		explainDropped(cfg, glob)
 		return exitHarness
 	}
 
@@ -906,7 +945,7 @@ func hostileHTTPRun(listen string, cfg config, glob, outDir string, noRedact boo
 	}
 	if len(cases) == 0 {
 		fmt.Fprintf(os.Stderr, "charpy run: no client case applies to %s\n", cfg.revision)
-		explainUnobservable(cfg, glob)
+		explainDropped(cfg, glob)
 		return exitHarness
 	}
 

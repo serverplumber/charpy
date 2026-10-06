@@ -218,6 +218,9 @@ func New(o Options) (*Driver, error) {
 		return nil, err
 	}
 
+	if err := scenario.Reaches(o.Case.Match, transcript.ClassGateway); err != nil {
+		return nil, err
+	}
 	d.script, err = scenario.Basic(o.Case.Match, o.Stimulus)
 	if err != nil {
 		return nil, err
