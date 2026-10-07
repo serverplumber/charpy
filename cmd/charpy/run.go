@@ -440,6 +440,7 @@ func openTranscript(dir string, cfg config, mode transcript.Mode, pr *transcript
 			Clock: clock.ModeReal,
 		},
 		Sched:    clock.RealSched(),
+		Wall:     clock.RealWall(),
 		RunID:    runID,
 		Redactor: redactor,
 	})
@@ -737,6 +738,7 @@ func httpScriptOne(ctx context.Context, url string, cfg config, c interpose.Case
 			SubjectURL: url,
 			Transcript: tr,
 			Sched:      sched,
+			Wall:       clock.RealWall(),
 			Ledger:     interpose.NewLedger(sched),
 			Face:       cfg.face,
 			RunSeed:    cfg.seed,
@@ -834,6 +836,7 @@ func gatewayScriptOne(ctx context.Context, command []string, url string, cfg con
 		Timeout:    cfg.timeout,
 		Transcript: tr,
 		Sched:      sched,
+		Wall:       clock.RealWall(),
 		Ledger:     interpose.NewLedger(sched),
 		RunSeed:    cfg.seed,
 	})
@@ -961,6 +964,7 @@ func hostileHTTPRun(listen string, cfg config, glob, outDir string, noRedact boo
 		Cases:      cases,
 		Transcript: tr,
 		Sched:      sched,
+		Wall:       clock.RealWall(),
 		Ledger:     interpose.NewLedger(sched),
 		RunSeed:    cfg.seed,
 	})

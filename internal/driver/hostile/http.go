@@ -29,6 +29,7 @@ type HTTPOptions struct {
 	Cases      []interpose.Case
 	Transcript *transcript.Writer
 	Sched      clock.Sched
+	Wall       clock.Wall
 	Ledger     *interpose.Ledger
 
 	RunSeed   string
@@ -92,6 +93,7 @@ func NewHTTP(o HTTPOptions) (*HTTPServer, error) {
 		Cases:      o.Cases,
 		Transcript: o.Transcript,
 		Sched:      o.Sched,
+		Wall:       o.Wall,
 		Ledger:     o.Ledger,
 		RunSeed:    o.RunSeed,
 		ClientID:   o.ClientID,

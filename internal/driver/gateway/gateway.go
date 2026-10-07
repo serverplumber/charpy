@@ -98,6 +98,7 @@ type Options struct {
 
 	Transcript *transcript.Writer
 	Sched      clock.Sched
+	Wall       clock.Wall
 	Ledger     *interpose.Ledger
 	RunSeed    string
 }
@@ -208,7 +209,7 @@ func New(o Options) (*Driver, error) {
 
 	d.down, err = proxy.New(proxy.Options{
 		SubjectURL: o.SubjectURL,
-		Run:        run, Sched: o.Sched, Cases: cases, RunSeed: o.RunSeed,
+		Run:        run, Sched: o.Sched, Wall: o.Wall, Cases: cases, RunSeed: o.RunSeed,
 		Face: transcript.Downstream, ConnPrefix: "d-", Join: true,
 		// Owned stimulus, as in proxy.Script: a fault that destroys charpy's
 		// own request is answered by charpy, so the script can go on.
@@ -254,7 +255,7 @@ func (d *Driver) Run(ctx context.Context) error {
 		}
 		u.proxy, err = proxy.New(proxy.Options{
 			SubjectURL: refURL,
-			Run:        d.run, Sched: d.o.Sched, Cases: d.cases, RunSeed: d.o.RunSeed,
+			Run:        d.run, Sched: d.o.Sched, Wall: d.o.Wall, Cases: d.cases, RunSeed: d.o.RunSeed,
 			Face: transcript.Upstream, ConnPrefix: u.name + "-", Join: true,
 			// charpy serves here, so it knows the declarations a
 			// schema_violation against the declared output breaks.

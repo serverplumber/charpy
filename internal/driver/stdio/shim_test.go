@@ -145,6 +145,7 @@ func driveWith(t *testing.T, set func(*stdio.Options), clientFrames ...string) r
 			Clock:   clock.ModeReal,
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)

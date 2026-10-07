@@ -35,6 +35,10 @@ type Options struct {
 	Sched      clock.Sched
 	Ledger     *interpose.Ledger
 
+	// Wall is real time, for keep-alive comments on a stalled stream: they
+	// hold off the subject's timer, which is real (ADR-001). Required.
+	Wall clock.Wall
+
 	// Face is the subject's face. A server subject is faced downstream.
 	Face transcript.Face
 	// Correlate is the link regime for recorded frames. Nil defaults to a
@@ -126,6 +130,9 @@ type Proxy struct {
 func New(o Options) (*Proxy, error) {
 	if o.SubjectURL == "" {
 		return nil, errors.New("proxy: no subject URL")
+	}
+	if o.Wall == nil {
+		return nil, errors.New("proxy: Options.Wall is required; a run declares its clock")
 	}
 	if o.Face == "" {
 		o.Face = transcript.Downstream
@@ -701,7 +708,7 @@ func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		conn.StreamClose(transcript.CharpyClose, int(sse.Written()))
 		return true, held
 	case fault.StreamStall:
-		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.wall()}); err != nil {
+		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.o.Wall}); err != nil {
 			conn.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
 		}
 	}
@@ -805,8 +812,6 @@ func (p *Proxy) emitEvent(sse *wire.SSE, e wire.Encoded, dir transcript.Directio
 		conn.Note(fmt.Sprintf("writing event: %v", err))
 	}
 }
-
-func (p *Proxy) wall() clock.Wall { return clock.RealWall() }
 
 // requestHTTP records the transport detail of the client's request: its
 // headers, no status. Header names are lowercased and pass through the run's

@@ -838,6 +838,7 @@ func TestNewValidatesTheRun(t *testing.T) {
 		{"unknown clock mode", func(o *transcript.Options) { o.Run.Clock = "frozen" }},
 		{"no version", func(o *transcript.Options) { o.Run.CharpyVersion = "" }},
 		{"no clock", func(o *transcript.Options) { o.Sched = nil }},
+		{"no wall clock", func(o *transcript.Options) { o.Wall = nil }},
 		{"peer with no version", func(o *transcript.Options) {
 			o.Run.Peer = &transcript.Peer{Module: "example.com/sdk"}
 		}},
@@ -857,6 +858,7 @@ func TestNewValidatesTheRun(t *testing.T) {
 					Subject: transcript.Subject{Class: transcript.ClassGateway}, Clock: clock.ModeInjected,
 				},
 				Sched: clock.NewInjected(),
+				Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 			}
 			tc.mutate(&opts)
 			if _, err := transcript.New(&bytes.Buffer{}, opts); err == nil {

@@ -118,6 +118,7 @@ func driveWith(t *testing.T, c interpose.Case, timeout time.Duration, command fu
 			Subject: transcript.Subject{Class: transcript.ClassGateway}, Clock: clock.ModeReal,
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +131,7 @@ func driveWith(t *testing.T, c interpose.Case, timeout time.Duration, command fu
 		Case:       c,
 		Era:        revision.V20251125,
 		Timeout:    timeout,
-		Transcript: tr, Sched: sched, Ledger: interpose.NewLedger(sched), RunSeed: "8f2c1a",
+		Transcript: tr, Sched: sched, Wall: clock.NewFixedWall(time.Unix(0, 0)), Ledger: interpose.NewLedger(sched), RunSeed: "8f2c1a",
 	})
 	if err != nil {
 		t.Fatal(err)

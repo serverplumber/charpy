@@ -33,6 +33,7 @@ func driveHTTP(t *testing.T, c interpose.Case, era revision.Revision, sessions f
 			Peer:    peer.Describe(era),
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -43,6 +44,7 @@ func driveHTTP(t *testing.T, c interpose.Case, era revision.Revision, sessions f
 		Cases:      []interpose.Case{c},
 		Transcript: tr,
 		Sched:      sched,
+		Wall:       clock.NewFixedWall(time.Unix(0, 0)),
 		Ledger:     interpose.NewLedger(sched),
 		RunSeed:    "8f2c1a",
 	})

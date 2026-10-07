@@ -81,6 +81,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 			Peer:    peer.Describe(era),
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -94,6 +95,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 			SubjectURL: subject(t),
 			Transcript: tr,
 			Sched:      sched,
+			Wall:       clock.NewFixedWall(time.Unix(0, 0)),
 			Ledger:     interpose.NewLedger(sched),
 			Face:       transcript.Downstream,
 			RunSeed:    "8f2c1a",

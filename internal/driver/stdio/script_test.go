@@ -43,6 +43,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision, stim ...scena
 			Peer:    peer.Describe(era),
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)

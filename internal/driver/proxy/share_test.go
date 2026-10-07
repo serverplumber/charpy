@@ -28,7 +28,7 @@ func front(t *testing.T, run *exchange.Run, sched clock.Sched, face transcript.F
 	t.Cleanup(refSrv.Close)
 
 	p, err := proxy.New(proxy.Options{
-		SubjectURL: refSrv.URL, Run: run, Sched: sched, Face: face, ConnPrefix: prefix,
+		SubjectURL: refSrv.URL, Run: run, Sched: sched, Wall: clock.NewFixedWall(time.Unix(0, 0)), Face: face, ConnPrefix: prefix,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -50,6 +50,7 @@ func TestProxiesShareOneRun(t *testing.T) {
 			Subject: transcript.Subject{Class: transcript.ClassGateway}, Clock: clock.ModeReal,
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +119,7 @@ func TestAProxyRefusesALedgerNotItsRuns(t *testing.T) {
 	sched := clock.RealSched()
 	run := &exchange.Run{Ledger: interpose.NewLedger(sched)}
 	_, err := proxy.New(proxy.Options{
-		SubjectURL: "http://127.0.0.1:1/", Run: run, Sched: sched,
+		SubjectURL: "http://127.0.0.1:1/", Run: run, Sched: sched, Wall: clock.NewFixedWall(time.Unix(0, 0)),
 		Ledger: interpose.NewLedger(sched),
 	})
 	if err == nil {

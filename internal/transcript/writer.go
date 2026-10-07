@@ -230,8 +230,8 @@ type Options struct {
 	// Sched is the injected clock, and is required: which clock is in force
 	// is a property of the run, not a default (ADR-001).
 	Sched clock.Sched
-	// Wall defaults to real wall time, because wall time is the only kind
-	// there is. Tests substitute a fixed one.
+	// Wall is the clock t_wall is read from, and is required for the same
+	// reason: a run passes real wall time, a test a fixed one.
 	Wall clock.Wall
 	// RunID is generated when empty.
 	RunID string
@@ -299,13 +299,13 @@ func New(w io.Writer, opts Options) (*Writer, error) {
 	if opts.Sched == nil {
 		return nil, errors.New("transcript: Options.Sched is required; a run declares its clock")
 	}
+	if opts.Wall == nil {
+		return nil, errors.New("transcript: Options.Wall is required; a run declares its clock")
+	}
 	if err := validateRun(&opts.Run); err != nil {
 		return nil, err
 	}
 
-	if opts.Wall == nil {
-		opts.Wall = clock.RealWall()
-	}
 	if opts.Redactor == nil {
 		opts.Redactor = NewRedactor()
 	}

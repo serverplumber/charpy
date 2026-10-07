@@ -50,6 +50,7 @@ func newTranscript(t *testing.T, buf io.Writer, era revision.Revision, sched clo
 			Peer:    peer.Describe(era),
 		},
 		Sched: sched,
+		Wall:  clock.NewFixedWall(time.Unix(0, 0)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +167,7 @@ func httpRun(t *testing.T, c interpose.Case, session func(context.Context, *mcp.
 
 	h, err := hostile.NewHTTP(hostile.HTTPOptions{
 		Era: revision.V20251125, Cases: []interpose.Case{c}, Transcript: tr,
-		Sched: sched, Ledger: interpose.NewLedger(sched), RunSeed: "8f2c1a",
+		Sched: sched, Wall: clock.NewFixedWall(time.Unix(0, 0)), Ledger: interpose.NewLedger(sched), RunSeed: "8f2c1a",
 	})
 	if err != nil {
 		t.Fatalf("NewHTTP: %v", err)
