@@ -476,3 +476,35 @@ its forwarded copy arrived on, rather than off the tool's name.
 
 **Trigger to revisit.** The first case that needs two upstreams to declare
 the same name, or a gateway that rewrites tool names.
+
+---
+
+## An oversized stdio frame ends the relay with no record
+
+**Gap.** The stdio shim (`driver/stdio`) and the hostile stdio driver
+(`driver/hostile`) scan frames with a `bufio.Scanner` limited to 4 MiB. A
+line past that stops the scanner with `bufio.ErrTooLong`, and neither relay
+checks `sc.Err()` after its loop: the direction simply stops relaying. No
+`frame_capped` event is written and nothing says why the traffic ended, so
+a subject that wrote an endless line reads as one that went quiet.
+Memory is bounded -- this is silence, not the crash the HTTP path had.
+
+**Why it exists.** ADR-017 fixed the unbounded reads in the HTTP proxy and
+the SSE scanner, where charpy could be taken down. The stdio scanners were
+already bounded, so the same audit did not reach them.
+
+**Why it is not closed for v0.** Not yet done; it was found while closing
+ADR-017 and is scoped here rather than folded into that change.
+
+**What closing it would take.** Both relays checking `sc.Err()`, and on
+`ErrTooLong` doing what ADR-017 does over HTTP: a `frame_capped` event for
+the direction, with the bytes read and the first 64 KiB, and the stream
+closed with reason `frame_cap` rather than left to read as the subject's
+silence. `bufio.Scanner` discards the oversized token, so recording a
+prefix means reading lines another way -- `wire.MaxFrame` and a bounded
+line reader like the SSE scanner's -- which also retires the two local
+`maxFrame` constants. A test per driver with a subject that writes one line
+that never ends.
+
+**Trigger to revisit.** Before any stdio resilience result is cited: a
+reaction the transcript cannot see is one the oracle reports wrongly.

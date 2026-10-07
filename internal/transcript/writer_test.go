@@ -198,6 +198,17 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 	r.w.Event(transcript.Event{
 		Kind: transcript.FaultWithdrawn, Face: transcript.Downstream, Fault: fault,
 	})
+	// A frame charpy stopped reading at the cap, and the stream it closed.
+	r.w.Event(transcript.Event{
+		Kind: transcript.FrameCapped, Face: transcript.Downstream, Transport: transcript.TransportHTTP,
+		ConnID: "c-04", StreamID: "s-12",
+		Detail: transcript.CappedDetail(transcript.S2C, 4<<20+1, 4<<20, make([]byte, transcript.RawCap+10)),
+	})
+	r.w.Event(transcript.Event{
+		Kind: transcript.StreamClose, Face: transcript.Downstream, Transport: transcript.TransportHTTP,
+		ConnID: "c-04", StreamID: "s-12",
+		Detail: transcript.CloseDetail(transcript.FrameCap, 0),
+	})
 	r.w.Event(transcript.Event{
 		Kind: transcript.Probe, Face: transcript.Downstream, Transport: transcript.TransportHTTP,
 		Detail: transcript.ProbeDetail("ping", transcript.ProbeOK, clock.FromMillis(120)),
@@ -219,8 +230,8 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 	})
 
 	lines := r.close(t)
-	if len(lines) != 8 {
-		t.Fatalf("wrote %d lines, want 8", len(lines))
+	if len(lines) != 10 {
+		t.Fatalf("wrote %d lines, want 10", len(lines))
 	}
 	validateAll(t, sch, lines)
 }
@@ -652,6 +663,9 @@ func TestUnwritableLinesAreRefusedNotMangled(t *testing.T) {
 		}},
 		{"probe with no outcome", func(w *transcript.Writer) {
 			w.Event(transcript.Event{Kind: transcript.Probe, Detail: map[string]any{"method": "ping"}})
+		}},
+		{"frame_capped that names no direction", func(w *transcript.Writer) {
+			w.Event(transcript.Event{Kind: transcript.FrameCapped, Detail: map[string]any{"bytes_read": 10}})
 		}},
 		{"fault event that names no case", func(w *transcript.Writer) {
 			w.Event(transcript.Event{Kind: transcript.FaultApplied})

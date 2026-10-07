@@ -23,6 +23,7 @@ revisited.
 | ADR-014 | charpy stamps its notifications as well as its requests | Correlation |
 | ADR-015 | A gateway is judged downstream: the call a fault carried, then three questions | Oracle |
 | ADR-016 | Whether a run can reach a case's frame is derived from the matcher | Scenario player |
+| ADR-017 | A frame that never ends is a finding, and charpy stops reading it | Interposer |
 
 ---
 
@@ -790,3 +791,49 @@ HTTP, where the reconnect is the client's own.
 **Revisit if.** A setup gains a sender the table does not know -- an
 upstream script, a reconnecting upstream -- which adds rows rather than
 changing the rule.
+
+## ADR-017 — A frame that never ends is a finding, and charpy stops reading it
+
+**Question.** The proxy read request and response bodies whole with
+`io.ReadAll`, and the SSE scanner read lines with `bufio`'s `ReadBytes`
+and buffered units until a blank line. All three are unbounded. A subject
+that streams a body forever took charpy down -- killed by the bug class it
+hunts. Where does charpy stop, and what does the run say when it has to?
+
+**Decision.** Stop reading at 4 MiB a frame (`wire.MaxFrame`), record it,
+and go on. A frame past the cap gets a `frame_capped` event -- direction,
+bytes read, the cap, the first 64 KiB -- and no frame line. The proxy
+closes the subject's body and breaks the client's HTTP exchange without
+answering it (`http.ErrAbortHandler`). An event stream also gets a
+`stream_close` with reason `frame_cap`. The run ends as it would have; the
+reaction layer reports the frame as `OBSERVED`.
+
+**Why.** A sender that streams forever is a finding about that sender, not
+charpy failing, so exit 2 is wrong: it would discard the very reaction a
+fault provoked. Under the conformance precondition a conformant subject
+does not do this under a correct sequence, so a capped frame almost always
+follows a fault, and failing the run would throw that result away. Exit 2
+stays for charpy's own failures -- an unwritable transcript, say.
+
+The cap is per unit, never per stream: a stream of well-formed events that
+never ends is doing its job, and the deadline bounds it. Reads stop at
+cap+1 and report the overrun rather than truncating at the cap, because a
+body silently cut there looks exactly like a subject that cut it.
+
+**Considered.** A frame line with `raw_truncated`. Rejected: `raw_len` is
+the true length, and nobody measured one; the frame never crossed whole, so
+a frame line would say it did. A charpy-authored 502, or an error frame,
+toward the client. Rejected: it is charpy's answer posing as the
+subject's, and the client's next move would be a reaction to charpy. A
+bare `charpy_close`. Rejected: the cancellation invariant would credit a
+case with a close no fault made. `MUST`. Rejected: MCP sets no frame size,
+and nothing generated rejects one.
+
+**Cost.** A correct subject answering with a frame over 4 MiB -- a large
+`resources/read` blob -- is reported as past the cap and its exchange
+broken. The cap is generous for that reason, and the finding names the cap
+as charpy's. The 64 KiB transcript cap and the stdio shim's and hostile
+driver's own 4 MiB scanner limits are separate numbers.
+
+**Revisit if.** A real subject's correct traffic reaches the cap, which
+makes it a run option rather than a constant.

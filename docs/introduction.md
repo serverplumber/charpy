@@ -257,7 +257,7 @@ line types share one dense sequence:
   frame carried when a rewrite did not keep it.
 - **event**: `conn_open`/`conn_close`, `stream_open`/`stream_close`,
   `subject_exit`, `fault_scheduled`/`fault_applied`/`fault_withdrawn`,
-  `probe`, `clock_advance`, `note`. Events are load-bearing: under
+  `probe`, `clock_advance`, `frame_capped`, `note`. Events are load-bearing: under
   2026-07-28, closing a stream *is* the cancellation signal.
 
 The file is append-only, and a crashed run leaves a valid prefix. The

@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"bufio"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -189,6 +190,23 @@ type Event struct {
 // CloseDetail builds the detail a stream_close event must carry.
 func CloseDetail(reason CloseReason, bytesWritten int) map[string]any {
 	return map[string]any{"reason": string(reason), "bytes_written": bytesWritten}
+}
+
+// CappedDetail builds the detail a frame_capped event carries: the way the
+// frame was travelling, which names who sent it; how much charpy read before
+// it stopped, a lower bound on the frame's length; the cap; and the first
+// RawCap bytes, base64 as in a frame's raw column, so a reader can see what
+// the frame was.
+func CappedDetail(dir Direction, read, limit int, prefix []byte) map[string]any {
+	if len(prefix) > RawCap {
+		prefix = prefix[:RawCap]
+	}
+	return map[string]any{
+		"direction":  string(dir),
+		"bytes_read": read,
+		"cap":        limit,
+		"raw":        base64.StdEncoding.EncodeToString(prefix),
+	}
 }
 
 // AppliedDetail builds the detail a fault_applied event must carry. The

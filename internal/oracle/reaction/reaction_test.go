@@ -232,3 +232,86 @@ func TestAFaultWithNoRecordedDirectionYieldsNothing(t *testing.T) {
 		t.Errorf("a direction-less fault produced findings: %+v", fs)
 	}
 }
+
+// A subject that answers the question after a fault with a frame that never
+// ends has reacted, and the reaction is that frame -- not a silence, which is
+// what reading on to the end of the run would call it.
+func TestAFrameThatNeverEndsIsTheReaction(t *testing.T) {
+	tr := oracletest.New(t, transcript.ClassServer).
+		FaultToSubject().
+		ToSubject(pingReq).
+		CappedFromSubject().
+		Done()
+
+	f := only(t, reactions(t, tr))
+	if f.Verdict != oracle.Observed || !strings.Contains(f.Summary, "past charpy's size cap") {
+		t.Errorf("got %s %q, want the capped frame as the reaction", f.Verdict, f.Summary)
+	}
+	if !strings.Contains(f.Detail, "5242880 bytes") {
+		t.Errorf("detail = %q, want how much charpy read", f.Detail)
+	}
+}
+
+func frameCaps(t *testing.T, tr *transcript.Transcript) []oracle.Finding {
+	t.Helper()
+	var out []oracle.Finding
+	for _, f := range reaction.Check(tr).Findings {
+		if f.Check == "frame-cap" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// Every capped frame is reported in its own right, and belongs to the fault
+// before it on its connection.
+func TestACappedFrameCitesTheFaultBeforeIt(t *testing.T) {
+	tr := oracletest.New(t, transcript.ClassServer).
+		FaultToSubject().
+		ToSubject(pingReq).
+		CappedFromSubject().
+		Done()
+
+	f := only(t, frameCaps(t, tr))
+	// MCP sets no frame size: the cap is charpy's, and never a MUST.
+	if f.Verdict != oracle.Observed {
+		t.Errorf("verdict = %s, want OBSERVED", f.Verdict)
+	}
+	if f.Citation != "frame/malformed-request@2025-11-25#seed=8f2c1a" {
+		t.Errorf("citation = %q", f.Citation)
+	}
+	if !strings.HasPrefix(f.Summary, "the subject ") {
+		t.Errorf("summary = %q, want the subject named as the sender", f.Summary)
+	}
+}
+
+// A capped frame with no fault before it is still reported. Under the
+// conformance precondition it is the stronger signal, not noise.
+func TestACappedFrameWithNoFaultIsStillReported(t *testing.T) {
+	tr := oracletest.New(t, transcript.ClassServer).
+		ToSubject(pingReq).
+		CappedFromSubject().
+		Done()
+
+	f := only(t, frameCaps(t, tr))
+	if f.Citation != "" {
+		t.Errorf("citation = %q, want none: no fault came first", f.Citation)
+	}
+}
+
+// A frame past the cap from the subject's peer is not the subject's reaction,
+// and is reported as the peer's.
+func TestAPeersCappedFrameIsNotTheSubjects(t *testing.T) {
+	tr := oracletest.New(t, transcript.ClassServer).
+		FaultToSubject().
+		CappedToSubject().
+		Done()
+
+	f := only(t, reactions(t, tr))
+	if strings.Contains(f.Summary, "size cap") {
+		t.Errorf("reaction = %q, want the peer's frame not read as the subject's", f.Summary)
+	}
+	if c := only(t, frameCaps(t, tr)); !strings.HasPrefix(c.Summary, "the subject's peer ") {
+		t.Errorf("summary = %q", c.Summary)
+	}
+}

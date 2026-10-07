@@ -124,6 +124,9 @@ const (
 	FaultWithdrawn EventKind = "fault_withdrawn"
 	Probe          EventKind = "probe"
 	ClockAdvance   EventKind = "clock_advance"
+	// FrameCapped is a frame charpy stopped reading at its size cap. The frame
+	// never crossed: there is no frame line for it, and this is the record.
+	FrameCapped EventKind = "frame_capped"
 	// Note is a free-text harness annotation. The oracle ignores it.
 	Note EventKind = "note"
 )
@@ -138,6 +141,10 @@ const (
 	SubjectClose CloseReason = "subject_close"
 	CloseTimeout CloseReason = "timeout"
 	CloseError   CloseReason = "error"
+	// FrameCap is charpy closing a stream because a frame on it passed the
+	// size cap. It is charpy's hand, but not a fault's, and a cancellation
+	// read off a bare charpy_close would credit the wrong cause.
+	FrameCap CloseReason = "frame_cap"
 )
 
 // ProbeOutcome is the result of a liveness probe.

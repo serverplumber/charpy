@@ -68,6 +68,12 @@ func (r run) events(kind string) []map[string]any {
 // returns the transcript it produced.
 func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 	t.Helper()
+	return scriptAt(t, c, era, subject(t))
+}
+
+// scriptAt is script against the subject at url.
+func scriptAt(t *testing.T, c interpose.Case, era revision.Revision, url string) run {
+	t.Helper()
 
 	var buf strings.Builder
 	sched := clock.RealSched()
@@ -92,7 +98,7 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 		Era:     era,
 		Timeout: 10 * time.Second,
 		Options: proxy.Options{
-			SubjectURL: subject(t),
+			SubjectURL: url,
 			Transcript: tr,
 			Sched:      sched,
 			Wall:       clock.NewFixedWall(time.Unix(0, 0)),

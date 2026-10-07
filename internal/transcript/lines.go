@@ -421,7 +421,7 @@ func (w *Writer) EventLine(e Event) (EventLine, error) {
 
 	switch e.Kind {
 	case ConnOpen, ConnClose, StreamOpen, StreamClose, SubjectExit,
-		FaultScheduled, FaultApplied, FaultWithdrawn, Probe, ClockAdvance, Note:
+		FaultScheduled, FaultApplied, FaultWithdrawn, Probe, ClockAdvance, FrameCapped, Note:
 	default:
 		return EventLine{}, refuse("transcript: unknown event kind %q", e.Kind)
 	}
@@ -434,10 +434,17 @@ func (w *Writer) EventLine(e Event) (EventLine, error) {
 	switch e.Kind {
 	case StreamClose:
 		switch CloseReason(str(detail["reason"])) {
-		case PeerClose, CharpyClose, SubjectClose, CloseTimeout, CloseError:
+		case PeerClose, CharpyClose, SubjectClose, CloseTimeout, CloseError, FrameCap:
 		default:
 			return EventLine{}, refuse(
 				"transcript: stream_close detail.reason is %v; the cancellation invariant needs to know who closed", detail["reason"])
+		}
+	case FrameCapped:
+		switch Direction(str(detail["direction"])) {
+		case C2S, S2C:
+		default:
+			return EventLine{}, refuse(
+				"transcript: frame_capped detail.direction is %v; whose frame it was is the finding", detail["direction"])
 		}
 	case Probe:
 		if str(detail["method"]) == "" {

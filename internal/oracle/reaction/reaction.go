@@ -21,6 +21,7 @@ func Check(t *transcript.Transcript) oracle.Report {
 		react(&rep, t, class, e)
 	}
 	recovery(&rep, t)
+	capped(&rep, t, class)
 	return rep
 }
 
@@ -81,6 +82,18 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 			f.Seq = e.Seq
 			f.Summary = "the subject exited after the fault"
 			f.Detail = fmt.Sprintf("%s, %s after the fault", exitText(e.Detail), ms(e.TMonoNS-applied.TMonoNS))
+			rep.Add(f)
+			return
+		}
+		if e := en.Event; e != nil && e.EventKind == transcript.FrameCapped &&
+			sameConn(e.ConnID, applied.ConnID) && subjectSent(class, e) {
+			// The subject began a frame and did not stop. Whatever it was
+			// answering got no answer charpy could relay, and reading on as
+			// though it had simply gone quiet would say it did nothing.
+			f.Verdict = oracle.Observed
+			f.Seq = e.Seq
+			f.Summary = "the subject sent a frame past charpy's size cap after the fault"
+			f.Detail = fmt.Sprintf("%s, %s after the fault", cappedText(e.Detail), ms(e.TMonoNS-applied.TMonoNS))
 			rep.Add(f)
 			return
 		}
@@ -165,6 +178,60 @@ func recovery(rep *oracle.Report, t *transcript.Transcript) {
 		}
 		rep.Add(f)
 	}
+}
+
+// capped reports every frame charpy stopped reading at its size cap, whoever
+// sent it and whether or not a fault came first. A frame that never ends is
+// the bug class charpy hunts, so none goes unreported: react names one as the
+// subject's reaction when it is, and this states the frame itself, citing the
+// last fault applied on its connection before it, if any.
+//
+// OBSERVED, never MUST: MCP sets no frame size, and the cap is charpy's.
+func capped(rep *oracle.Report, t *transcript.Transcript, class transcript.Class) {
+	last := map[string]*transcript.EventLine{}
+	for i := range t.Entries {
+		e := t.Entries[i].Event
+		if e == nil {
+			continue
+		}
+		conn := ""
+		if e.ConnID != nil {
+			conn = *e.ConnID
+		}
+		switch e.EventKind {
+		case transcript.FaultApplied:
+			last[conn] = e
+		case transcript.FrameCapped:
+			f := oracle.Finding{Verdict: oracle.Observed, Layer: Layer, Check: "frame-cap", Seq: e.Seq}
+			who := "the subject"
+			if !subjectSent(class, e) {
+				who = "the subject's peer"
+			}
+			f.Summary = fmt.Sprintf("%s sent a frame past charpy's size cap", who)
+			f.Detail = cappedText(e.Detail)
+			if a := last[conn]; a != nil && a.Fault != nil {
+				f.Citation = a.Fault.Citation
+				f.Detail += fmt.Sprintf(", %s after the fault at seq %d", ms(e.TMonoNS-a.TMonoNS), a.Seq)
+			}
+			rep.Add(f)
+		}
+	}
+}
+
+// subjectSent reports whether a frame_capped event's frame was the subject's:
+// the subject sends what it does not receive, on the face the event is on.
+func subjectSent(class transcript.Class, e *transcript.EventLine) bool {
+	var face transcript.Face
+	if e.Face != nil {
+		face = *e.Face
+	}
+	dir := transcript.Direction(str(e.Detail["direction"]))
+	return dir != "" && oracle.SubjectReceives(class, face, dir.Opposite())
+}
+
+func cappedText(d map[string]any) string {
+	return fmt.Sprintf("a %s frame still going after %d bytes, the cap being %d; charpy stopped reading and relayed none of it",
+		str(d["direction"]), i64(d["bytes_read"]), i64(d["cap"]))
 }
 
 func sameConn(a, b *string) bool {

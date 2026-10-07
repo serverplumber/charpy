@@ -53,7 +53,16 @@ func (s *SSEScanner) Scan() bool {
 	)
 
 	for {
-		line, err := s.r.ReadBytes('\n')
+		line, err := s.readLine(MaxFrame - buf.Len())
+		if tl, ok := err.(*FrameTooLarge); ok {
+			// Not yielded, unlike a stream that ends mid-unit: the subject did
+			// not stop here, charpy did, and relaying the part read would put
+			// a cut in the subject's mouth.
+			tl.Read += buf.Len()
+			tl.Prefix = append(buf.Bytes(), tl.Prefix...)
+			s.err = tl
+			return false
+		}
 		if len(line) > 0 {
 			trimmed := bytes.TrimRight(line, "\r\n")
 
@@ -96,6 +105,24 @@ func (s *SSEScanner) Scan() bool {
 	}
 }
 
+// readLine reads through the next newline, or to the end of the stream, and
+// fails with a *FrameTooLarge once the line passes limit. bufio's ReadBytes
+// would grow without bound on a line that never ends, and so would anything
+// built on it.
+func (s *SSEScanner) readLine(limit int) ([]byte, error) {
+	var line []byte
+	for {
+		chunk, err := s.r.ReadSlice('\n')
+		line = append(line, chunk...)
+		if len(line) > limit {
+			return nil, &FrameTooLarge{Read: len(line), Prefix: line}
+		}
+		if err != bufio.ErrBufferFull {
+			return line, err
+		}
+	}
+}
+
 // emit stores the unit and reports that one was read. It never fails; the
 // spans were measured against the bytes it is handed.
 func (s *SSEScanner) emit(raw []byte, body span, dataStart int, haveData, isComment bool) bool {
@@ -117,7 +144,11 @@ func (s *SSEScanner) emit(raw []byte, body span, dataStart int, haveData, isComm
 func (s *SSEScanner) Unit() Encoded { return s.unit }
 
 // Err reports why scanning stopped. io.EOF is the ordinary end and is folded
-// away; anything else is a real read error.
+// away; a *FrameTooLarge is a unit past MaxFrame, which charpy stopped reading
+// and did not yield; anything else is a real read error.
+//
+// The cap is per unit, not per stream. A stream of well-formed events that
+// never ends is a stream doing its job, and the run's deadline bounds it.
 func (s *SSEScanner) Err() error {
 	if s.err == io.EOF {
 		return nil

@@ -323,6 +323,13 @@ length.
 For a truncated frame, `raw` holds exactly what was sent — the truncation
 is the datum.
 
+The 64 KiB cap is on what the transcript _carries_: charpy read the whole
+frame and kept the head. There is a second cap, on what charpy _reads_ — 4
+MiB a frame (`wire.MaxFrame`). A frame past that never gets a frame line,
+because it never crossed whole and its true length is unknown; `raw_len`
+cannot hold a number nobody measured. It gets a `frame_capped` event (§6)
+instead.
+
 ### `http`
 
 Present when `transport = "http"`, otherwise null.
@@ -425,12 +432,24 @@ replaced only answers.
 | `fault_withdrawn` | Hang released, list restored, peer recovered | **Liveness clock starts here** |
 | `probe` | Liveness probe sent and its outcome | The reaction layer's recovery check |
 | `clock_advance` | Injected clock jumped | Replay determinism |
+| `frame_capped` | charpy stopped reading a frame at 4 MiB; `detail.direction` names the sender, `detail.bytes_read` is a lower bound on its length, `detail.cap` the cap, `detail.raw` the first 64 KiB, base64 | The reaction layer's `frame-cap` check, and its `reaction` check as what the subject did after a fault |
 | `note` | Free-text harness annotation in `detail.harness`; a follow-up question that failed in charpy's client also carries `detail.question` and `detail.error` | Debugging; no verdict reads a note, and the reaction layer cites a failed question's in a finding's detail |
 
 `stream_close.detail.reason` distinguishes `peer_close`, `charpy_close`,
-`timeout`, `error` and `subject_close`. The cancellation invariant on
-2026-07-28 needs to know *who* closed, and inferring it later from a bare
-close is not possible.
+`timeout`, `error`, `subject_close` and `frame_cap`. The cancellation
+invariant on 2026-07-28 needs to know *who* closed, and inferring it later
+from a bare close is not possible. `frame_cap` is charpy's hand but not a
+fault's: the stream was closed because a unit on it passed the read cap,
+and a bare `charpy_close` would credit a case with it.
+
+A frame past the read cap is a finding about its sender, never a failed
+run (`decisions.md` ADR-017). charpy records the `frame_capped` event,
+closes the subject's body, and breaks the client's HTTP exchange without
+answering it: any answer charpy wrote there would be charpy's, posing as
+the subject's. An event stream also gets its `stream_close`, reason
+`frame_cap`. The cap is per unit, not per stream: an endless stream of
+well-formed events is a stream doing its job, and the run's deadline
+bounds it.
 
 ---
 
@@ -483,7 +502,10 @@ them.
    no gaps.
 2. **Completeness of bytes.** Every byte charpy sent or received on a
    subject-facing connection appears in exactly one `frame.raw`, except
-   beyond the 64 KiB cap where `raw_truncated` marks it.
+   beyond the 64 KiB cap where `raw_truncated` marks it, and except a frame
+   past the 4 MiB read cap, which has no frame line: its first 64 KiB are
+   in a `frame_capped` event's `detail.raw`, and the rest charpy never
+   read.
 3. **Append-only.** Lines are never rewritten. A run that crashes leaves a
    valid prefix, and a partial transcript is a legitimate oracle input — it
    simply supports fewer conclusions.

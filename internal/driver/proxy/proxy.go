@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -260,12 +259,20 @@ func (p *Proxy) faultApplied(conn *exchange.Conn, c interpose.Case, verb interpo
 // ServeHTTP forwards one request to the subject and relays the response,
 // faulting whichever direction a case matched.
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	body, err := wire.ReadFrame(r.Body)
+	_ = r.Body.Close()
+	var tl *wire.FrameTooLarge
+	if errors.As(err, &tl) {
+		// The client's frame is past the cap: nothing whole to forward, and
+		// the subject never sees it. A client that does this is a finding
+		// about the client, not a reason for charpy to stop.
+		p.capped(p.conn(r), transcript.C2S, tl)
+		abort()
+	}
 	if err != nil {
 		http.Error(w, "charpy: reading request", http.StatusBadGateway)
 		return
 	}
-	_ = r.Body.Close()
 
 	conn := p.conn(r)
 
@@ -293,7 +300,9 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	p.relay(w, resp, conn)
+	if !p.relay(w, resp, conn) {
+		abort()
+	}
 }
 
 // serveFaulted forwards a request a case matched, with the case's fault on it,
@@ -396,7 +405,9 @@ func (p *Proxy) serveFaulted(w http.ResponseWriter, r *http.Request, c interpose
 		p.answerDestroyed(w, r, m, sentAtt, conn)
 		return
 	}
-	p.relay(w, resp, conn)
+	if !p.relay(w, resp, conn) {
+		abort()
+	}
 }
 
 // answerDestroyed answers the peer's request itself, as the stdio shim does:
@@ -440,7 +451,9 @@ func (p *Proxy) forwardAndRelay(w http.ResponseWriter, r *http.Request, body []b
 		return
 	}
 	defer resp.Body.Close()
-	p.relay(w, resp, conn)
+	if !p.relay(w, resp, conn) {
+		abort()
+	}
 }
 
 // aside sends a frame charpy synthesized to the subject as a request of its
@@ -522,7 +535,12 @@ func (p *Proxy) forward(r *http.Request, body []byte) (*http.Response, error) {
 // relay copies the subject's response back to the client, faulting it on the
 // way. The two content types are different shapes: an event stream charpy
 // scans unit by unit, or a single JSON body.
-func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) {
+//
+// It reports false when a frame of the subject's passed the size cap. That is
+// recorded already; what is left is the client's response, which only the
+// caller knows is the client's -- an answer relayed to nobody has no client
+// to tell.
+func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) bool {
 	copyHeaders(w.Header(), resp.Header)
 
 	// A handshake's answer names the session it established: bind it to the
@@ -535,18 +553,37 @@ func (p *Proxy) relay(w http.ResponseWriter, resp *http.Response, conn *exchange
 	}
 
 	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
-		p.relaySSE(w, resp, conn)
-		return
+		return p.relaySSE(w, resp, conn)
 	}
-	p.relayJSON(w, resp, conn)
+	return p.relayJSON(w, resp, conn)
 }
+
+// capped records a frame charpy stopped reading at the size cap. The frame
+// never crosses: there is nothing whole to match, fault or relay, so the
+// frame_capped event is its only record, and the reaction layer reads it as
+// what the sender did.
+func (p *Proxy) capped(conn *exchange.Conn, dir transcript.Direction, tl *wire.FrameTooLarge) {
+	conn.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
+}
+
+// abort ends the client's HTTP exchange without answering it, after a frame
+// passed the cap. Any answer charpy wrote here -- a 502, an error frame --
+// would be charpy's, posing as the subject's, and the client's next move would
+// be a reaction to charpy. A connection that breaks is what happened: the
+// stream ended, and the client sees it end.
+func abort() { panic(http.ErrAbortHandler) }
 
 // relayJSON handles a single-message response. Only a whole-frame fault can
 // apply here: there is no event to cut, and no second frame to hold a Before
 // or After, so those are recorded as not applied rather than forced into a
 // shape the transport does not have.
-func (p *Proxy) relayJSON(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) {
-	body, err := io.ReadAll(resp.Body)
+func (p *Proxy) relayJSON(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) bool {
+	body, err := wire.ReadFrame(resp.Body)
+	var tl *wire.FrameTooLarge
+	if errors.As(err, &tl) {
+		p.capped(conn, transcript.S2C, tl)
+		return false
+	}
 	if err != nil {
 		conn.Note(fmt.Sprintf("reading subject response: %v", err))
 	}
@@ -571,6 +608,7 @@ func (p *Proxy) relayJSON(w http.ResponseWriter, resp *http.Response, conn *exch
 	if _, err := w.Write(deliver); err != nil {
 		conn.Note(fmt.Sprintf("writing to client: %v", err))
 	}
+	return true
 }
 
 // planJSON runs a matched case's plan against a JSON response, returning the
@@ -614,7 +652,7 @@ func (p *Proxy) planJSON(m envelope.Message, prior envelope.ID, conn *exchange.C
 // relaySSE scans the subject's event stream and relays it unit by unit,
 // faulting whichever unit a case matches. A stream is where the truncate and
 // multi-frame verbs live, so this is the path the HTTP catalogue exercises.
-func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) {
+func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *exchange.Conn) bool {
 	sse := wire.NewSSE(w)
 	sc := wire.NewSSEScanner(resp.Body)
 
@@ -641,7 +679,7 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 			// failure mode and the transcript has to show it happened.
 			if _, err := wire.Emit(sse, unit); err != nil {
 				conn.Note(fmt.Sprintf("relaying comment: %v", err))
-				return
+				return true
 			}
 			continue
 		}
@@ -658,7 +696,7 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 			conn.Frame(transcript.S2C, unit.Body(), nil, sseHTTP(resp, unit))
 			if _, err := wire.Emit(sse, unit); err != nil {
 				conn.Note(fmt.Sprintf("relaying event: %v", err))
-				return
+				return true
 			}
 			continue
 		}
@@ -667,20 +705,28 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 		if end {
 			// then close, or a stall the client has walked away from:
 			// nothing more crosses on this stream.
-			return
+			return true
 		}
 		if h != nil {
 			held = h
 			// Held at a wider scope than the one response, nothing more
 			// crosses on this stream.
 			if h.scope != "" && h.scope != "response" {
-				return
+				return true
 			}
 		}
 	}
-	if err := sc.Err(); err != nil {
+	err := sc.Err()
+	var tl *wire.FrameTooLarge
+	if errors.As(err, &tl) {
+		p.capped(conn, transcript.S2C, tl)
+		conn.StreamClose(transcript.FrameCap, int(sse.Written()))
+		return false
+	}
+	if err != nil {
 		conn.Note(fmt.Sprintf("scanning subject stream: %v", err))
 	}
+	return true
 }
 
 // heldSSE is an event a hold withheld, and how much of its stream the hold

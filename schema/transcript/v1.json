@@ -284,7 +284,7 @@
             "stream_open", "stream_close",
             "subject_exit",
             "fault_scheduled", "fault_applied", "fault_withdrawn",
-            "probe", "clock_advance", "note"
+            "probe", "clock_advance", "frame_capped", "note"
           ]
         },
         "face": { "anyOf": [{ "$ref": "#/$defs/face" }, { "type": "null" }] },
@@ -309,7 +309,7 @@
                 "required": ["reason"],
                 "properties": {
                   "reason": {
-                    "enum": ["peer_close", "charpy_close", "subject_close", "timeout", "error"]
+                    "enum": ["peer_close", "charpy_close", "subject_close", "timeout", "error", "frame_cap"]
                   }
                 }
               }
@@ -328,6 +328,25 @@
           "then": {
             "properties": { "fault": { "type": "object" } },
             "required": ["fault"]
+          }
+        },
+        {
+          "description": "A frame charpy stopped reading at its size cap must say whose it was and how much was read.",
+          "if": { "properties": { "event_kind": { "const": "frame_capped" } }, "required": ["event_kind"] },
+          "then": {
+            "properties": {
+              "detail": {
+                "type": "object",
+                "required": ["direction", "bytes_read", "cap", "raw"],
+                "properties": {
+                  "direction": { "$ref": "#/$defs/direction" },
+                  "bytes_read": { "type": "integer", "minimum": 0 },
+                  "cap": { "type": "integer", "minimum": 0 },
+                  "raw": { "type": "string", "contentEncoding": "base64" }
+                }
+              }
+            },
+            "required": ["detail"]
           }
         },
         {

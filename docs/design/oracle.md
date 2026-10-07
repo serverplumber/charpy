@@ -335,6 +335,7 @@ subject.** Walking forward from the fault, on its connection:
 |---|---|
 | the subject answered a request it received after the fault | `OBSERVED` — answered, and how long after |
 | the subject exited, not by charpy's hand | `OBSERVED` — exited, with code and signal |
+| the subject sent a frame past charpy's 4 MiB read cap | `OBSERVED` — how much charpy read, and how long after |
 | a request after the fault was still open when the run ended | `OBSERVED` — did not answer, and for how long |
 | nothing asked the subject anything after the fault | `INCONCLUSIVE`, `nothing-asked-after-fault` |
 
@@ -396,6 +397,18 @@ gateway left. Each one not asked is `INCONCLUSIVE`, `question-not-asked`,
 whether or not a carried call was judged, and cites the driver's note on
 why: a gateway that passes a broken stream through ends charpy's client's
 session, and the questions after it fail without crossing.
+
+**Frames past the read cap, `frame-cap`.** Every `frame_capped` event
+gets an `OBSERVED` finding of its own, whoever sent the frame and whether
+or not a fault came first: a frame that never ends is the bug class charpy
+hunts, so none goes unreported. It cites the last fault applied on its
+connection before it, if there was one. With none, under the conformance
+precondition, it is the stronger signal, not noise. It is never `MUST`:
+MCP sets no frame size, and 4 MiB is charpy's number (ADR-017). After a
+fault, the same event also ends the `reaction` walk as the subject's
+reaction, rather than reading on and calling the request it was answering
+unanswered. A gateway's reaction is judged by its downstream questions,
+which this does not change; `frame-cap` still reports the frame.
 
 **The case-specific check, `expectation`,** judges what a case declares in
 `[case.expect]`, on the same anchor. `expect_error_code` looks for the

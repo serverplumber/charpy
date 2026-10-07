@@ -229,6 +229,23 @@ func (b *Builder) QuestionFailed(question, why string) *Builder {
 	return b
 }
 
+// CappedFromSubject records charpy stopping a frame of the subject's at the
+// size cap, on the current connection.
+func (b *Builder) CappedFromSubject() *Builder { return b.capped(b.dirFromSubject()) }
+
+// CappedToSubject records charpy stopping a frame headed for the subject --
+// its peer's -- at the size cap.
+func (b *Builder) CappedToSubject() *Builder { return b.capped(b.dirToSubject()) }
+
+func (b *Builder) capped(dir transcript.Direction) *Builder {
+	b.w.Event(transcript.Event{
+		Kind: transcript.FrameCapped, Face: b.face, Transport: transcript.TransportStdio,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Detail: transcript.CappedDetail(dir, 5<<20, 4<<20, []byte(`{"jsonrpc":"2.0","id":3,"result":{"blob":"AAAA`)),
+	})
+	return b
+}
+
 // Done closes the transcript and reads it back, which also checks that
 // everything built here is something a reader accepts.
 func (b *Builder) Done() *transcript.Transcript {
