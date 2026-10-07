@@ -665,7 +665,8 @@ func (p *Proxy) relaySSE(w http.ResponseWriter, resp *http.Response, conn *excha
 
 		end, h := p.faultSSE(sse, cases[0], m, unit, resp, prior, conn)
 		if end {
-			// then close: the stream ends here.
+			// then close, or a stall the client has walked away from:
+			// nothing more crosses on this stream.
 			return
 		}
 		if h != nil {
@@ -690,7 +691,8 @@ type heldSSE struct {
 }
 
 // faultSSE applies a matched case to one event. It reports whether the stream
-// should end (a then=close), and the hold if it withheld the event. The verb
+// should end (a then=close, or a then=stall once the client has left), and
+// the hold if it withheld the event. The verb
 // dance mirrors the shim's; what differs is delivery -- a cut lands in the
 // subject's own event bytes, and synthesized frames become events.
 func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, unit wire.Encoded, resp *http.Response, prior envelope.ID, conn *exchange.Conn) (bool, *heldSSE) {
@@ -708,9 +710,18 @@ func (p *Proxy) faultSSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		conn.StreamClose(transcript.CharpyClose, int(sse.Written()))
 		return true, held
 	case fault.StreamStall:
-		if _, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.o.Wall}); err != nil {
+		st, err := wire.Stall(sse, wire.StallOptions{Keepalive: plan.Keepalive, Wall: p.o.Wall})
+		if err != nil {
 			conn.Note(fmt.Sprintf("case %s could not stall: %v", c.ID, err))
+			break
 		}
+		// As over stdio, nothing further crosses a stalled stream, and it
+		// stays open: returning would end the response, and the client would
+		// see a cut stream close rather than go quiet. Truncation has no
+		// withdrawal, so the stall lasts until the client leaves.
+		<-resp.Request.Context().Done()
+		_ = st.End()
+		return true, held
 	}
 	return false, held
 }

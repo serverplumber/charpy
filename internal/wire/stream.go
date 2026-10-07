@@ -200,18 +200,17 @@ func (st *Stalled) arm() {
 	})
 }
 
+// tick writes under the lock, so a keep-alive is either written before End
+// returns or not at all: the owner of the stream may finish with it the moment
+// End does.
 func (st *Stalled) tick() {
 	st.mu.Lock()
+	defer st.mu.Unlock()
 	if st.end {
-		st.mu.Unlock()
 		return
 	}
-	st.mu.Unlock()
 
 	_, err := Emit(st.s, EncodeComment(st.o.Comment))
-
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if err != nil && st.err == nil {
 		st.err = err
 	}
