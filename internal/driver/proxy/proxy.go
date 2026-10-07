@@ -874,25 +874,17 @@ func (p *Proxy) emitEvent(sse *wire.SSE, e wire.Encoded, dir transcript.Directio
 // headers, no status. Header names are lowercased and pass through the run's
 // redaction policy in the writer.
 func requestHTTP(r *http.Request) *transcript.HTTP {
-	return &transcript.HTTP{Headers: flatten(r.Header)}
+	return &transcript.HTTP{Headers: r.Header.Clone()}
 }
 
 func responseHTTP(resp *http.Response) *transcript.HTTP {
-	return &transcript.HTTP{Status: resp.StatusCode, Headers: flatten(resp.Header)}
+	return &transcript.HTTP{Status: resp.StatusCode, Headers: resp.Header.Clone()}
 }
 
 func sseHTTP(resp *http.Response, e wire.Encoded) *transcript.HTTP {
 	h := responseHTTP(resp)
 	h.SSEEvent = "message"
 	return h
-}
-
-func flatten(h http.Header) map[string]string {
-	out := make(map[string]string, len(h))
-	for k, vs := range h {
-		out[strings.ToLower(k)] = strings.Join(vs, ", ")
-	}
-	return out
 }
 
 func copyHeaders(dst, src http.Header) {

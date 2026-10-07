@@ -288,7 +288,42 @@ bullets above cover it when the time comes.
 faults — most plausibly a gateway one, since intermediaries are where
 HTTP/2 gets terminated and re-originated. At that point the question is not
 whether to fork but whether `x/net/http2` alone suffices, and the answer is
-probably yes.
+probably yes. Doing it also lands on the entry below.
+
+## Header fidelity is tested over HTTP/1.1 only
+
+**Gap.** The transcript keeps each header field line as its own value
+(`design/transcript.md`), and `TestRepeatedHeadersCrossAsSeparateValues`
+in `internal/driver/proxy` proves it end to end, but only over HTTP/1.1:
+`httptest.NewServer` speaks nothing else.
+
+**Why it is safe today.** HTTP/2 reaches charpy on one path. The front
+listener is plain HTTP/1.1 — no TLS, no h2c, no `Protocols` — so a client
+always arrives over HTTP/1.1. Upstream, the proxy's `&http.Client{}` uses
+the default transport, which negotiates HTTP/2 against an `https://`
+subject. On that path a repeated header arrives as separate HPACK entries,
+Go's transport adds each one to `resp.Header`, and the proxy records
+`resp.Header.Clone()` — the same map, whichever protocol decoded it.
+
+**What would break it.**
+
+- **HTTP/2 on the front listener.** A client may split `Cookie` into
+  crumbs (RFC 9113 §8.2.3); Go's HTTP/2 server rejoins them with `"; "`.
+  That is spec-mandated, not a loss, but the HTTP/1.1 test does not cover
+  it.
+- **Recording headers from charpy's own frames.** The `Framer` route above
+  decodes HPACK itself. If header recording ever moves off `http.Header`
+  onto that path, Go no longer guarantees one value per field, and charpy
+  must.
+
+**Closing it.** Run the same test against an
+`httptest.NewUnstartedServer` subject with `EnableHTTP2 = true` and
+`StartTLS()`, behind a proxy whose client trusts that server's
+certificate. That covers the one HTTP/2 path that exists. Each change
+above adds its own HTTP/2 variant of the test.
+
+**Trigger to revisit.** Serving HTTP/2 on the front listener, or recording
+headers from anything other than an `http.Header`.
 
 ## Production interposition (chaos mode)
 

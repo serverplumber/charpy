@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -151,9 +152,9 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 		Message:  req(t, 7, "tools/call"),
 		Revision: revision.V20251125,
 		HTTP: &transcript.HTTP{
-			Headers: map[string]string{
-				"Content-Type":  "application/json",
-				"Authorization": "Bearer hunter2",
+			Headers: map[string][]string{
+				"Content-Type":  {"application/json"},
+				"Authorization": {"Bearer hunter2"},
 			},
 		},
 		Link: transcript.Link{
@@ -181,7 +182,7 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 		Revision: revision.V20251125,
 		HTTP: &transcript.HTTP{
 			Status:   200,
-			Headers:  map[string]string{"content-type": "text/event-stream"},
+			Headers:  map[string][]string{"content-type": {"text/event-stream"}},
 			SSEEvent: "message",
 			SSEID:    "42",
 		},
@@ -497,11 +498,11 @@ func TestRawIsCappedButRawLenIsNot(t *testing.T) {
 }
 
 func TestRedaction(t *testing.T) {
-	headers := map[string]string{
-		"Authorization":  "Bearer hunter2",
-		"Cookie":         "session=abc",
-		"Content-Type":   "application/json",
-		"Mcp-Session-Id": "sess-aaa",
+	headers := map[string][]string{
+		"Authorization":  {"Bearer hunter2"},
+		"Cookie":         {"session=abc"},
+		"Content-Type":   {"application/json"},
+		"Mcp-Session-Id": {"sess-aaa"},
 	}
 
 	t.Run("on by default", func(t *testing.T) {
@@ -509,20 +510,20 @@ func TestRedaction(t *testing.T) {
 		r.header(t)
 		writeHTTPFrame(t, r, headers)
 
-		got := decode(t, r.close(t)[1])["http"].(map[string]any)["headers"].(map[string]any)
-		if got["authorization"] != transcript.Digest("Bearer hunter2") {
+		got := headersOf(t, r.close(t)[1])
+		if !slices.Equal(got["authorization"], []string{transcript.Digest("Bearer hunter2")}) {
 			t.Errorf("authorization = %v, want a digest", got["authorization"])
 		}
-		if got["cookie"] != transcript.Digest("session=abc") {
+		if !slices.Equal(got["cookie"], []string{transcript.Digest("session=abc")}) {
 			t.Errorf("cookie = %v, want a digest", got["cookie"])
 		}
-		if got["content-type"] != "application/json" {
+		if !slices.Equal(got["content-type"], []string{"application/json"}) {
 			t.Errorf("content-type = %v, want it in the clear", got["content-type"])
 		}
 		// The session id is carried in the clear in session.mcp_session_id,
 		// so redacting the header while printing the field would be
 		// incoherent rather than safe.
-		if got["mcp-session-id"] != "sess-aaa" {
+		if !slices.Equal(got["mcp-session-id"], []string{"sess-aaa"}) {
 			t.Errorf("mcp-session-id = %v, want it in the clear", got["mcp-session-id"])
 		}
 		if _, ok := got["Authorization"]; ok {
@@ -539,8 +540,8 @@ func TestRedaction(t *testing.T) {
 		if decode(t, lines[0])["redaction"] != "off" {
 			t.Error("a transcript written without redaction must say so in its header")
 		}
-		got := decode(t, lines[1])["http"].(map[string]any)["headers"].(map[string]any)
-		if got["authorization"] != "Bearer hunter2" {
+		got := headersOf(t, lines[1])
+		if !slices.Equal(got["authorization"], []string{"Bearer hunter2"}) {
 			t.Errorf("authorization = %v, want the raw value", got["authorization"])
 		}
 	})
@@ -557,7 +558,46 @@ func TestRedaction(t *testing.T) {
 	})
 }
 
-func writeHTTPFrame(t *testing.T, r *rig, headers map[string]string) {
+// A header sent twice and a header whose one value contains a comma are
+// different messages; a gateway case has to be able to tell which it saw.
+func TestHeaderFieldLinesStaySeparate(t *testing.T) {
+	r := newRig(t)
+	r.header(t)
+	writeHTTPFrame(t, r, map[string][]string{
+		"Mcp-Param-Q":   {"a", "b"},
+		"Mcp-Param-R":   {"a, b"},
+		"Authorization": {"Bearer one", "Bearer two"},
+	})
+
+	got := headersOf(t, r.close(t)[1])
+	if !slices.Equal(got["mcp-param-q"], []string{"a", "b"}) {
+		t.Errorf("mcp-param-q = %q, want two values in order", got["mcp-param-q"])
+	}
+	if !slices.Equal(got["mcp-param-r"], []string{"a, b"}) {
+		t.Errorf("mcp-param-r = %q, want one value", got["mcp-param-r"])
+	}
+	// Each digest is of one field line's exact bytes, so either credential
+	// can still be matched on the other face.
+	want := []string{transcript.Digest("Bearer one"), transcript.Digest("Bearer two")}
+	if !slices.Equal(got["authorization"], want) {
+		t.Errorf("authorization = %q, want one digest per value", got["authorization"])
+	}
+}
+
+func headersOf(t *testing.T, line string) map[string][]string {
+	t.Helper()
+	var l struct {
+		HTTP struct {
+			Headers map[string][]string `json:"headers"`
+		} `json:"http"`
+	}
+	if err := json.Unmarshal([]byte(line), &l); err != nil {
+		t.Fatalf("decoding headers: %v", err)
+	}
+	return l.HTTP.Headers
+}
+
+func writeHTTPFrame(t *testing.T, r *rig, headers map[string][]string) {
 	t.Helper()
 	r.w.Frame(transcript.Frame{
 		Face: transcript.Downstream, Direction: transcript.C2S, Transport: transcript.TransportHTTP,

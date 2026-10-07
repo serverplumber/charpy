@@ -337,13 +337,16 @@ Present when `transport = "http"`, otherwise null.
 ```jsonc
 "http": {
   "status": 200,
-  "headers": { "content-type": "text/event-stream", "mcp-protocol-version": "2025-11-25" },
+  "headers": { "content-type": ["text/event-stream"], "mcp-protocol-version": ["2025-11-25"] },
   "sse_event": "message",       // SSE event type, or "comment" for a `:` keep-alive line
   "sse_id": "42"                // <=2025-11-25 only; removed in 2026-07-28
 }
 ```
 
-Header names are lowercased. Values matching the redaction policy are
+Header names are lowercased. Each name maps to its values one per field
+line, in arrival order — never comma-joined, because `x: a, b` and two `x`
+lines are different messages and a gateway case may need to tell them apart.
+Values matching the redaction policy are
 replaced with `"<redacted:sha256:4318c2c9…>"` — a stable digest, so the
 credential-leak invariant can still prove that the *same* secret appeared
 on both faces without the transcript itself becoming a secret. The digest

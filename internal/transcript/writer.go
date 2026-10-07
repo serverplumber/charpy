@@ -104,10 +104,12 @@ type Link struct {
 }
 
 // HTTP is the transport detail of a frame that crossed HTTP. Header names are
-// lowercased and values are passed through the run's redaction policy.
+// lowercased and values are passed through the run's redaction policy. Each
+// field line keeps its own value: joining them would make one "a, b" line
+// indistinguishable from two.
 type HTTP struct {
 	Status   int
-	Headers  map[string]string
+	Headers  map[string][]string
 	SSEEvent string
 	SSEID    string
 }

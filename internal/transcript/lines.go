@@ -138,10 +138,10 @@ type EventLine struct {
 }
 
 type HTTPLine struct {
-	Status   *int              `json:"status"`
-	Headers  map[string]string `json:"headers"`
-	SSEEvent *string           `json:"sse_event"`
-	SSEID    *string           `json:"sse_id"`
+	Status   *int                `json:"status"`
+	Headers  map[string][]string `json:"headers"`
+	SSEEvent *string             `json:"sse_event"`
+	SSEID    *string             `json:"sse_id"`
 }
 
 type LinkLine struct {
@@ -595,19 +595,22 @@ func faultLineFrom(f *Fault) (*FaultLine, error) {
 }
 
 // HTTPLine lowercases header names and puts every value through the run's
-// redaction policy.
+// redaction policy, one value at a time so a digest is always of exactly the
+// bytes of one field line.
 func (w *Writer) HTTPLine(h *HTTP) *HTTPLine {
 	out := &HTTPLine{
-		Headers:  make(map[string]string, len(h.Headers)),
+		Headers:  make(map[string][]string, len(h.Headers)),
 		SSEEvent: optional(h.SSEEvent),
 		SSEID:    optional(h.SSEID),
 	}
 	if h.Status != 0 {
 		out.Status = ptr(h.Status)
 	}
-	for name, value := range h.Headers {
+	for name, values := range h.Headers {
 		lower := strings.ToLower(name)
-		out.Headers[lower] = w.redactor.Value(lower, value)
+		for _, v := range values {
+			out.Headers[lower] = append(out.Headers[lower], w.redactor.Value(lower, v))
+		}
 	}
 	return out
 }

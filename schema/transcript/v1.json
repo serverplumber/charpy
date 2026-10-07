@@ -111,8 +111,8 @@
         "status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
         "headers": {
           "type": "object",
-          "description": "Lowercased header names. Redacted values appear as <redacted:sha256:...>.",
-          "additionalProperties": { "type": "string" }
+          "description": "Lowercased header names, each mapped to its field-line values in arrival order. Redacted values appear as <redacted:sha256:...>.",
+          "additionalProperties": { "type": "array", "items": { "type": "string" }, "minItems": 1 }
         },
         "sse_event": { "type": ["string", "null"] },
         "sse_id": { "type": ["string", "null"] }
