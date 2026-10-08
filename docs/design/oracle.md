@@ -298,10 +298,10 @@ three tier-1 SDKs diverging is a spec gap. The output is a divergence table
 than a competing verdict.
 
 Reference peers are pinned in lockfiles for reproducibility, with a
-separate scheduled CI job that floats to latest and diffs the divergence
-set (`decisions.md` ADR-004). Peers are pooled across cases; per-case
-subprocess spawn costs hundreds of milliseconds each and would otherwise
-dominate the run.
+separate scheduled CI job, once there is CI, that floats to latest and
+diffs the divergence set (`decisions.md` ADR-004). Peers are pooled across
+cases; per-case subprocess spawn costs hundreds of milliseconds each and
+would otherwise dominate the run.
 
 ---
 
@@ -493,7 +493,8 @@ function from transcript to verdicts.
   them.
 - **Golden verdicts** beside each, compared byte for byte.
 - **Determinism gate**: `charpy replay` over every transcript in
-  `testdata/`, twice, must produce byte-identical output. Enforced in CI.
+  `testdata/transcripts/`, twice, must produce byte-identical output.
+  Enforced by `just check`.
 - **Fuzzing** the transcript reader with `testing.F`; failing inputs land
   in `testdata/fuzz/` and become permanent regression cases.
 - **The fixture gateway** (`internal/fixture/gateway`) — a minimal gateway

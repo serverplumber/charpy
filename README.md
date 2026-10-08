@@ -52,12 +52,13 @@ Streamable HTTP, and judges what they do when a fault reaches them.
   — did it answer the next question, stop answering, exit, or recover on a
   fresh session.
 - **Reports** as text and JSONL. Replaying a transcript twice gives
-  byte-identical verdicts, and CI checks that it does.
+  byte-identical verdicts, and `just check` requires that it does.
 
 **Not built yet:** the gateway driver, which puts charpy on both sides of a
 subject and correlates the two; the cross-SDK differential; soak mode; the
-HTML report. [`introduction.md`](docs/introduction.md) §9 has the full
-list, and [`open-problems.md`](docs/open-problems.md) the known gaps.
+HTML report; CI for charpy itself, until which `just check` is the gate.
+[`introduction.md`](docs/introduction.md) §9 has the full list, and
+[`open-problems.md`](docs/open-problems.md) the known gaps.
 
 ## Quick start
 

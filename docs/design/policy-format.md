@@ -351,7 +351,7 @@ Kept honest by two tests in `internal/catalogue`:
 
 - **Staleness.** The committed schema must byte-match what the registries
   currently generate. Changing a registry without running
-  `just case-schema` fails CI.
+  `just case-schema` fails `just check`.
 - **Agreement.** Every shipped manifest must validate against the generated
   schema, and a set of deliberately broken documents must not. The schema
   can neither lag the loader nor rot into accepting everything.

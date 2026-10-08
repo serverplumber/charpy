@@ -36,7 +36,7 @@ default:
 # Develop
 # -----------------------------
 
-# Everything CI runs, in the same order
+# The gate: everything that must pass before a commit, and what CI will run
 check: lint vet race determinism
 
 # Build the binary with version stamps
@@ -79,9 +79,9 @@ _go-files:
     git ls-files --cached --others --exclude-standard '*.go' |
         while read -r f; do if [ -e "$f" ]; then echo "$f"; fi; done
 
-# The determinism guarantee, as a gate rather than an aspiration: replaying one
+# The determinism guarantee, as a gate rather than an aspiration: replaying a
 # transcript twice must produce byte-identical verdicts (decisions.md ADR-001).
-# Replay one transcript twice and require byte-identical verdicts
+# Replay every test transcript twice and require byte-identical verdicts
 determinism:
     {{go}} test ./cmd/charpy -run TestReplayIsByteIdentical -v
 

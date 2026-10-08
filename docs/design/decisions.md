@@ -66,7 +66,7 @@ This is achievable precisely because the oracle is offline (`oracle.md`
    `internal/oracle/`.
 
 And one shipped guarantee: `charpy replay run.jsonl` twice produces
-byte-identical verdicts. It is a CI gate, not an aspiration.
+byte-identical verdicts. It is a gate in `just check`, not an aspiration.
 
 ### The clock is a property of the run
 
@@ -163,6 +163,9 @@ suite that is either untrustworthy or blind. Two jobs cost one CI file.
 
 The scheduled job's output is a diff, not a verdict. An SDK changing
 behaviour is not a failure of charpy and must not fail charpy's build.
+
+Neither job exists yet: the differential is not built, and charpy has no
+CI. Until it does, `just check` is the gate.
 
 ---
 

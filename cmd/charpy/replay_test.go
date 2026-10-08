@@ -37,24 +37,35 @@ func replay(t *testing.T, args ...string) (string, int) {
 	return out.String(), code
 }
 
-// The determinism guarantee charpy actually ships. ADR-001 calls this a CI
-// gate rather than an aspiration: runs against a live subject cannot be made
-// reproducible, and verdicts must be, forever.
+// The determinism guarantee charpy actually ships. ADR-001 calls this a gate
+// rather than an aspiration: runs against a live subject cannot be made
+// reproducible, and verdicts must be, forever. It covers the hand-written
+// transcript above and every golden transcript in testdata/.
 func TestReplayIsByteIdentical(t *testing.T) {
-	path := writeTranscript(t, misbehaving)
+	golden, err := filepath.Glob("../../testdata/transcripts/*.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A gate over no files passes, so an empty or moved testdata/ must fail.
+	if len(golden) == 0 {
+		t.Fatal("no golden transcripts found")
+	}
+	paths := append([]string{writeTranscript(t, misbehaving)}, golden...)
 
-	for _, format := range []string{"text", "jsonl"} {
-		t.Run(format, func(t *testing.T) {
-			first, code := replay(t, "--format", format, path)
-			second, again := replay(t, "--format", format, path)
+	for _, path := range paths {
+		for _, format := range []string{"text", "jsonl"} {
+			t.Run(filepath.Base(path)+"/"+format, func(t *testing.T) {
+				first, code := replay(t, "--format", format, path)
+				second, again := replay(t, "--format", format, path)
 
-			if first != second {
-				t.Errorf("two replays of one transcript differ:\n--- first\n%s\n--- second\n%s", first, second)
-			}
-			if code != again {
-				t.Errorf("exit codes differ: %d then %d", code, again)
-			}
-		})
+				if first != second {
+					t.Errorf("two replays of one transcript differ:\n--- first\n%s\n--- second\n%s", first, second)
+				}
+				if code != again {
+					t.Errorf("exit codes differ: %d then %d", code, again)
+				}
+			})
+		}
 	}
 }
 
