@@ -339,12 +339,12 @@ summary      = "An upstream credential or session id appears in a downstream fra
 # --- lifecycle --------------------------------------------------------------
 
 [[case]]
-id           = "lifecycle/capability-narrowed-on-reconnect"
+id           = "lifecycle/capability-narrowed-on-later-handshake"
 applies_to   = "*"
 subject      = ["client", "gateway"]
 verdict      = "OBSERVED"
 derives_from = "none"
-summary      = "The peer reconnects claiming fewer capabilities than before; a cached capability must not be reused."
+summary      = "A later handshake in the run claims fewer capabilities than an earlier one; the peer uses only what that handshake advertised."
 
   [case.match]
   method     = "initialize"
@@ -358,6 +358,9 @@ summary      = "The peer reconnects claiming fewer capabilities than before; a c
   kind                = "capability_flip"
   field               = "capabilities"
   direction_of_change = "narrow"
+
+  [case.expect]
+  expect_negotiated_only = true
 
 [[case]]
 id           = "lifecycle/server-request-unanswered"

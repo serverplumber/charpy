@@ -27,7 +27,7 @@ func TestReachesTheShippedCatalogue(t *testing.T) {
 			// A notification upstream: charpy's upstreams only answer.
 			"manifest/mutate-silent",
 			// A second upstream handshake: nothing asks one to reconnect.
-			"lifecycle/capability-narrowed-on-reconnect",
+			"lifecycle/capability-narrowed-on-later-handshake",
 			// A sampling answer: charpy's upstreams never sample.
 			"lifecycle/server-request-unanswered",
 		},

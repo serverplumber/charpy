@@ -83,14 +83,16 @@ func connectOnce(t *testing.T, endpoint string, era revision.Revision, call bool
 	_ = cs.Close()
 }
 
-// The reconnect case HTTP unlocks: charpy narrows capabilities on the second
-// connection's initialize result, catching a client that cached the first.
+// The case HTTP unlocks: charpy narrows capabilities on the run's second
+// initialize result, and leaves the first alone.
 //
-// The shipped case, not a copy. Its matcher is what says "the reconnect": a
-// matcher naming only the upstream face fired on the first handshake too, and
-// a client that is narrowed from the start has nothing cached to misuse.
-func TestCapabilityFlipFiresOnReconnect(t *testing.T) {
-	r := driveHTTP(t, shipped(t, "lifecycle/capability-narrowed-on-reconnect"), revision.V20251125, func(t *testing.T, endpoint string) {
+// The shipped case, not a copy. Its matcher says "the second handshake in the
+// run", not "the same client again": the two sessions here are two
+// mcp.Clients, and charpy could not tell them from one client reconnecting --
+// nothing on the wire links a new session to an old one. That is all this
+// test claims (notes/status.md).
+func TestCapabilityFlipFiresOnALaterHandshake(t *testing.T) {
+	r := driveHTTP(t, shipped(t, "lifecycle/capability-narrowed-on-later-handshake"), revision.V20251125, func(t *testing.T, endpoint string) {
 		connectOnce(t, endpoint, revision.V20251125, false) // conn 1: full caps
 		connectOnce(t, endpoint, revision.V20251125, false) // conn 2: narrowed
 	})

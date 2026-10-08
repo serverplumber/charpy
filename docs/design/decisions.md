@@ -761,7 +761,7 @@ first question a second path question.
 class and observer, and still select a frame nothing in the run sends.
 Behind a gateway, `manifest/mutate-silent` waits for an upstream
 `list_changed` that charpy's reference servers never send, and
-`capability-narrowed-on-reconnect` for a second upstream handshake that
+`capability-narrowed-on-later-handshake` for a second upstream handshake that
 nothing provokes. Both passed selection and were refused when the driver
 was built, mid-run: the run exited 2 and left an empty transcript. Where
 is that decided, and from what?
@@ -785,8 +785,8 @@ reads as a harness failure.
 it repeats `[case.match]`, and the one need the matcher cannot show --
 whether a tool samples -- is the run's `--tool`, not the case's. Whether a
 pair is reachable depends on the setup as much as the case: the same
-`capability-narrowed-on-reconnect` is reachable against a client over
-HTTP, where the reconnect is the client's own.
+`capability-narrowed-on-later-handshake` is reachable against a client
+over HTTP, whose second handshake is the client's own to send.
 
 **Revisit if.** A setup gains a sender the table does not know -- an
 upstream script, a reconnecting upstream -- which adds rows rather than

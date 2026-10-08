@@ -141,6 +141,7 @@ func expectations() (func(string) reaction.Expectation, error) {
 		var e reaction.Expectation
 		e.ErrorCode, _ = c.ExpectInt("expect_error_code")
 		e.HTTPStatus, _ = c.ExpectInt("expect_http_status")
+		e.NegotiatedOnly = c.ExpectBool("expect_negotiated_only")
 		return e
 	}, nil
 }

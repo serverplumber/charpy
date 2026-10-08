@@ -416,7 +416,11 @@ subject's answer to the faulted request -- an error under its id, or under
 a null id, which is how JSON-RPC answers a request too broken to carry
 one -- and reports it against the code the case expects;
 `expect_http_status` reads the status of the subject's first HTTP answer
-after the fault. Each is `OBSERVED` and worded as the fact it is ("answered
+after the fault; `expect_negotiated_only` reads the handshake the fault
+rewrote, as it crossed, and lists the subject's later requests on that
+connection whose method needs a capability it did not advertise -- the
+lifecycle's "only use capabilities that were successfully negotiated",
+judged against what the subject was actually told. Each is `OBSERVED` and worded as the fact it is ("answered
 with error -32601; the case expects -32700"): an expectation is the case's
 reading of what a subject should do, not a generated artifact rejecting a
 frame. Expectations are read from the catalogue by case id at replay,

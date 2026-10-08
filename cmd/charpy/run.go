@@ -933,8 +933,9 @@ func hostileRun(cfg config, glob, outDir string, noRedact bool, out io.Writer) i
 // hostileHTTPRun serves a hostile server over HTTP for a client under test that
 // connects to charpy's ingress. Like the stdio hostile mode it is relay-shaped:
 // the client drives, all applicable cases are armed, and a signal ends the run.
-// HTTP is what makes a reconnect possible, so capability-narrowed-on-reconnect
-// can fire here where it cannot over stdio.
+// HTTP is what makes a second handshake possible, so
+// capability-narrowed-on-later-handshake can fire here where it cannot over
+// stdio.
 func hostileHTTPRun(listen string, cfg config, glob, outDir string, noRedact bool, out io.Writer) int {
 	if cfg.auto {
 		fmt.Fprint(os.Stderr, "charpy run: --hostile-http needs an explicit --revision.\n"+

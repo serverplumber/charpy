@@ -163,8 +163,9 @@ universal invariants still run.
 | `liveness_probe_within_ms` | Real-time budget for recovery after withdrawal (`oracle.md` §6) |
 | `expect_error_code` | The subject is expected to answer the faulted request with this JSON-RPC code; a null-id error counts, since that is how JSON-RPC answers a request too broken to carry an id |
 | `expect_http_status` | The subject's first HTTP answer after the fault is expected to carry this status. HTTP only |
+| `expect_negotiated_only` | Boolean. After the handshake the fault rewrote, the subject is expected to send only requests that handshake's capabilities allow, on that connection |
 
-The two `expect_` keys are judged by the reaction layer's `expectation`
+The `expect_` keys are judged by the reaction layer's `expectation`
 check (`oracle.md` §6), which reads them from the catalogue by case id at
 replay: the transcript names the case, not what it expects.
 

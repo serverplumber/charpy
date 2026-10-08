@@ -22,7 +22,7 @@ import (
 // by the format.
 type expectKey struct {
 	name    string
-	typ     string // "integer" | "array"
+	typ     string // "integer" | "boolean" | "array"
 	summary string
 }
 
@@ -35,6 +35,8 @@ var expectKeys = []expectKey{
 		summary: "The subject is expected to answer with this JSON-RPC error code."},
 	{name: "expect_http_status", typ: "integer",
 		summary: "The subject is expected to answer with this HTTP status. HTTP only."},
+	{name: "expect_negotiated_only", typ: "boolean",
+		summary: "After the faulted handshake, the subject is expected to send only requests that handshake's capabilities allow."},
 }
 
 func lookupExpectKey(name string) (expectKey, bool) {
@@ -139,8 +141,8 @@ func checkExpect(table map[string]any) []string {
 				k, strings.Join(expectKeyNames(), ", ")))
 			continue
 		}
-		if ek.typ == "integer" {
-			if e := checkType(v, "integer", "[case.expect]", k); e != "" {
+		if ek.typ != "array" {
+			if e := checkType(v, ek.typ, "[case.expect]", k); e != "" {
 				errs = append(errs, e)
 			}
 			continue

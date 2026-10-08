@@ -45,9 +45,10 @@ type HTTPOptions struct {
 // in-process reference peer, and faults the responses toward the client. The
 // client is the subject, faced upstream; the correlation is ViaNone, matching
 // the stdio hostile driver, because the one face under test is the client and
-// there is nothing to join. Reconnect is a real reconnect -- a fresh reference
-// server per request -- which is what lets capability_flip fire on the second
-// connection's initialize result and catch a client reusing cached capabilities.
+// there is nothing to join. Each handshake is a connection of its own, which is
+// what lets capability_flip fire on a second initialize result. Whether that
+// handshake is the same client reconnecting is not on the wire: a new session
+// carries no id linking it to an old one, and every connection is client c0.
 type HTTPServer struct {
 	o       HTTPOptions
 	proxy   *proxy.Proxy

@@ -129,3 +129,52 @@ func TestNothingIsExpectedOfWhatWasNotAsked(t *testing.T) {
 		t.Errorf("a fault that reached charpy produced %+v", got)
 	}
 }
+
+// narrowed writes a client's handshake with charpy's answer rewritten to
+// advertise only logging, as capability_flip leaves it, and the fault_applied
+// that follows.
+func narrowed(b *oracletest.Builder) *oracletest.Builder {
+	b.Face(transcript.Upstream)
+	b.FromSubject(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"c","version":"1"}}}`)
+	b.Raw(transcript.S2C, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-11-25","capabilities":{"logging":{}},"serverInfo":{"name":"s","version":"1"}}}`,
+		&transcript.Fault{
+			CaseID: "frame/malformed-request", Citation: "frame/malformed-request@2025-11-25#seed=8f2c1a",
+			Kind: "capability_flip",
+		})
+	return b.FaultToSubject()
+}
+
+// The narrowed answer is what the client negotiated, so a tools/call after it
+// uses a capability that was not, whatever the server offered before.
+func TestARequestOutsideTheNegotiatedCapabilitiesIsReported(t *testing.T) {
+	tr := narrowed(oracletest.New(t, transcript.ClassClient)).
+		FromSubject(`{"jsonrpc":"2.0","method":"notifications/initialized"}`).
+		FromSubject(`{"jsonrpc":"2.0","id":2,"method":"logging/setLevel","params":{"level":"info"}}`).
+		FromSubject(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"x"}}`).
+		Done()
+	f := expectation(t, tr, reaction.Expectation{NegotiatedOnly: true})
+	if !strings.Contains(f.Summary, "tools/call (needs tools)") || strings.Contains(f.Summary, "logging") {
+		t.Errorf("summary = %q, want tools/call alone", f.Summary)
+	}
+}
+
+func TestKeepingToTheNegotiatedCapabilitiesIsReported(t *testing.T) {
+	tr := narrowed(oracletest.New(t, transcript.ClassClient)).
+		FromSubject(`{"jsonrpc":"2.0","id":2,"method":"ping"}`).
+		FromSubject(`{"jsonrpc":"2.0","id":3,"method":"logging/setLevel","params":{"level":"info"}}`).
+		Done()
+	f := expectation(t, tr, reaction.Expectation{NegotiatedOnly: true})
+	if !strings.Contains(f.Summary, "sent only what the handshake") {
+		t.Errorf("summary = %q", f.Summary)
+	}
+}
+
+// A fault that rewrote something other than a handshake gives the expectation
+// nothing negotiated to judge against, and says so rather than passing.
+func TestNoHandshakeIsNothingToJudgeAgainst(t *testing.T) {
+	tr := destroyed(oracletest.New(t, transcript.ClassServer)).FromSubject(parseError).Done()
+	f := expectation(t, tr, reaction.Expectation{NegotiatedOnly: true})
+	if !strings.Contains(f.Summary, "did not land on a handshake") {
+		t.Errorf("summary = %q", f.Summary)
+	}
+}

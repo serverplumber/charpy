@@ -56,6 +56,13 @@ func (c Case) ExpectInt(key string) (int64, bool) {
 	return v, ok
 }
 
+// ExpectBool reads a boolean [case.expect] key, which the loader has already
+// checked is one, as [Case.ExpectInt] does an integer.
+func (c Case) ExpectBool(key string) bool {
+	v, _ := c.Expect[key].(bool)
+	return v
+}
+
 // livenessBudget reads [case.expect].liveness_probe_within_ms, already
 // validated as an integer by the loader. It is the one expect key a driver
 // consumes; the rest stays oracle input.

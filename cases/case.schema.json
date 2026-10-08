@@ -30,6 +30,10 @@
                 "description": "The subject is expected to answer with this HTTP status. HTTP only.",
                 "type": "integer"
               },
+              "expect_negotiated_only": {
+                "description": "After the faulted handshake, the subject is expected to send only requests that handshake's capabilities allow.",
+                "type": "boolean"
+              },
               "invariants": {
                 "description": "Invariant names that must hold for this case. The universal invariants run regardless.",
                 "items": {
