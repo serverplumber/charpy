@@ -16,7 +16,7 @@ second. It is additive, not a competitor.
 
 **charpy assumes its subject already passes conformance.** That is a
 precondition, not a recommendation. Resilience results for an
-implementation that is not correct under a *correct* sequence are
+implementation that is not correct under a _correct_ sequence are
 worthless: you cannot tell a fault charpy injected from a bug that was
 there all along, so every finding is suspect and none of them are citable.
 The order is the only one in which either result means anything.
@@ -110,6 +110,19 @@ already reported as
 [what charpy measured](https://github.com/modelcontextprotocol/go-sdk/issues/1209#issuecomment-5856813005),
 including what the proposed fix leaves open, is on that issue.
 
+**The Go SDK's client can return a call's result before it has handled the
+notifications sent ahead of it.** A response settles the waiting call at
+once, while notifications read before it are queued and handled on another
+goroutine, so a progress or logging handler can still be running for a
+call that has already returned. For a gateway built on both halves of the
+SDK there is then no correct way to forward progress: stop when the
+upstream call returns and progress is lost, or keep forwarding and it
+reaches the caller after the gateway has answered, which the progress
+utility forbids. charpy hit this building its fixture gateway, which counts
+progress on the call's event stream and waits. Reported as
+[go-sdk#1337](https://github.com/modelcontextprotocol/go-sdk/issues/1337),
+with a reproduction.
+
 **The Go SDK's client accepts structured results that break the tool's
 declared `outputSchema`.** The specification says clients SHOULD validate
 them. That is a recommendation, not a requirement, and is reported here as
@@ -192,7 +205,13 @@ schema. The oracle and the reports are consumers of it, and the oracle runs
 re-run against transcripts captured today, and verdicts are exactly
 reproducible even though runs against a live subject are not.
 
-There is no database. JSONL *is* the database, and every invariant is a
+**The format is not stable yet.** Until the first release,
+`schema_version: 1` changes in place whenever the design needs it to, and a
+transcript from an earlier commit may not validate or replay against a
+later one. Stability starts at that release; promising it while v1 is still
+being sketched would be a promise this project could not keep.
+
+There is no database. JSONL _is_ the database, and every invariant is a
 query someone else can write with no code from charpy:
 
 ```sql
@@ -231,7 +250,7 @@ revision, seed. See
 
 | Output | Format |
 |---|---|
-| Transcript | JSONL, `schema_version` on every line |
+| Transcript | JSONL, `schema_version` on every line; not stable before the first release |
 | Verdicts | JSONL, referencing case citation and frame sequence numbers |
 | Exit code | `0` clean · `1` MUST violation · `2` harness error · `3` subject failed to start · `4` invalid policy |
 

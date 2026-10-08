@@ -522,9 +522,13 @@ them.
 5. **No oracle in the run path.** Nothing evaluates an invariant while the
    run is live. Writes are buffered and asynchronous so the frame path adds
    microseconds where subjects reason in milliseconds.
-6. **Schema additivity within a major version.** New optional fields may
-   appear in `schema_version: 1`. Consumers must ignore unknown fields.
-   Removing or retyping a field requires `schema_version: 2`.
+6. **Schema additivity within a major version** -- from the first release.
+   New optional fields may appear in `schema_version: 1`. Consumers must
+   ignore unknown fields. Removing or retyping a field requires
+   `schema_version: 2`. Until that release none of this holds:
+   `schema_version: 1` changes in place whenever the design needs it to,
+   and a transcript from an earlier commit may not validate or replay
+   against a later one.
 
 ---
 
