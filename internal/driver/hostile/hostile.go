@@ -312,12 +312,12 @@ func (h *Hostile) applyFault(ctx context.Context, c interpose.Case, m envelope.M
 		h.deliver(extra, dir, to, att)
 	}
 
+	var held *interpose.Withheld
 	switch {
 	case plan.Swallow:
 		h.inter.Swallow(f, c, m)
 	case plan.Hold != nil:
-		held := h.inter.Withhold(f, c, m, plan.Hold.For)
-		go h.release(held, plan.Hold, dir, to, att)
+		held = h.inter.Withhold(f, c, m, plan.Hold.For)
 	case plan.Deliver != nil:
 		h.inter.Rewrite(f, c, m, *plan.Deliver)
 		h.deliverCut(*plan.Deliver, &m, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
@@ -329,6 +329,12 @@ func (h *Hostile) applyFault(ctx context.Context, c interpose.Case, m envelope.M
 	}
 
 	h.x.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(plan.Verb()), dir))
+	// The release starts only now, though its timer has run since Withhold: a
+	// withdrawal recorded ahead of this fault_applied would be the release of a
+	// hold the transcript had not yet applied, which the reader refuses.
+	if held != nil {
+		go h.release(held, plan.Hold, dir, to, att)
+	}
 
 	// A closed pipe leaves no session to ask on, and a stall is this relay
 	// blocking: a ping could not reach the client through it, nor its answer

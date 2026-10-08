@@ -806,7 +806,6 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 		// on this response -- the client's request has been answered by
 		// silence.
 		held = p.inter.Withhold(f, c, m, plan.Hold.For)
-		go p.releaseHold(held, plan.Hold, conn)
 	case plan.Cut != nil:
 		p.inter.Rewrite(f, c, m, m)
 		p.emitCut(sse, unit, m, plan.Cut, transcript.S2C, att, resp, conn)
@@ -822,6 +821,12 @@ func (p *Proxy) applySSE(sse *wire.SSE, c interpose.Case, m envelope.Message, un
 	}
 
 	p.faultApplied(conn, c, plan.Verb(), m, transcript.S2C, resp)
+	// The release starts only now, though its timer has run since Withhold: a
+	// withdrawal recorded ahead of this fault_applied would be the release of a
+	// hold the transcript had not yet applied, which the reader refuses.
+	if held != nil {
+		go p.releaseHold(held, plan.Hold, conn)
+	}
 	return plan, held, true
 }
 

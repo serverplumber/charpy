@@ -424,12 +424,12 @@ func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.D
 		s.deliver(extra, dir, to, att)
 	}
 
+	var held *interpose.Withheld
 	switch {
 	case plan.Swallow:
 		s.inter.Swallow(f, c, m)
 	case plan.Hold != nil:
-		held := s.inter.Withhold(f, c, m, plan.Hold.For)
-		go s.release(held, plan.Hold, dir, to, att)
+		held = s.inter.Withhold(f, c, m, plan.Hold.For)
 	case plan.Deliver != nil:
 		s.inter.Rewrite(f, c, m, *plan.Deliver)
 		s.deliverCut(*plan.Deliver, &m, dir, to, c.Rewrote(m, *plan.Deliver), plan.Cut)
@@ -441,6 +441,12 @@ func (s *Shim) applyFault(c interpose.Case, m envelope.Message, dir transcript.D
 	}
 
 	s.x.FaultEvent(transcript.FaultApplied, c, transcript.AppliedDetail(string(plan.Verb()), dir))
+	// The release starts only now, though its timer has run since Withhold: a
+	// withdrawal recorded ahead of this fault_applied would be the release of a
+	// hold the transcript had not yet applied, which the reader refuses.
+	if held != nil {
+		go s.release(held, plan.Hold, dir, to, att)
+	}
 	s.applied++
 	if plan.Then == fault.StreamClose || plan.Then == fault.StreamStall {
 		s.broken = true
