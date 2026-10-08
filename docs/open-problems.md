@@ -511,3 +511,57 @@ its forwarded copy arrived on, rather than off the tool's name.
 
 **Trigger to revisit.** The first case that needs two upstreams to declare
 the same name, or a gateway that rewrites tool names.
+
+---
+
+## charpy is hardly hostile to a pipe
+
+**Gap.** Over stdio charpy attacks frames, not the pipe they travel on.
+Its faults rewrite, cut, withhold, duplicate or corrupt a frame's bytes
+-- including `bad_utf8` and `nul_byte` -- and can close or stall a
+direction after a cut. What a pipe itself can do to a subject goes
+unexercised:
+
+- **Delivery shape.** Every frame goes to the subject in a single write. It
+  is never dribbled a byte at a time or split across writes with a delay,
+  and several frames are never coalesced into one write, so a subject that
+  assumes one read is one line passes.
+- **Backpressure.** charpy always reads the subject's stdout promptly. It
+  never stops reading until the pipe buffer fills and the subject's writes
+  block while requests keep arriving on stdin -- the classic stdio
+  deadlock, and a likely one in a subject that handles requests on the
+  goroutine that writes responses.
+- **Broken pipe.** Closing the read end of the subject's stdout, so its
+  next write fails with `EPIPE` or kills it with `SIGPIPE`, is never
+  offered as a fault. ADR-017 avoids it as a side effect precisely because
+  the exit would be charpy's doing; as a deliberate, attributed fault it is
+  a distinct question about the subject.
+- **stderr.** It is passed straight to `Options.Errs` and never blocked or
+  closed, so a subject that wedges once a full stderr pipe blocks its
+  logging is untested.
+- **Size toward the subject.** charpy stops reading at 4 MiB but never
+  sends a subject a line that large to find its own limit; `deep_nest` is
+  depth, not size.
+- **Line framing.** No fault varies the delimiter: CRLF, blank or
+  whitespace-only lines between frames, a frame with no final newline, or
+  a raw newline inside a frame that splits it in two.
+
+**Why it exists.** The catalogue was written from the protocol down -- what
+can be wrong with a message -- and the stdio transport was treated as a
+delimiter rather than as an attack surface of its own.
+
+**Why it is not closed for v0.** Each is a new mechanism in `fault` and a
+new verb for the shim and hostile relays, and none of them can be put to a
+subject over HTTP, so none falls out of the existing work.
+
+**What closing it would take.** A transport-level fault family for stdio --
+write shaping (dribble, split, coalesce), a read pause with a duration, a
+read-end close, a stderr block, an oversized line, delimiter variants --
+each recorded as a fault so the reaction it provokes is attributed to the
+case rather than read as the subject's own failure. Backpressure and
+broken pipe need the relay to stop reading on purpose, which is the same
+seam ADR-017's drain already touches.
+
+**Trigger to revisit.** A stdio subject that passes every frame-level case
+and still fails in production on load or framing, or the first case anyone
+asks for that this list names.
