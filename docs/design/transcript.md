@@ -538,6 +538,13 @@ them.
    `schema_version: 1` changes in place whenever the design needs it to,
    and a transcript from an earlier commit may not validate or replay
    against a later one.
+7. **A withdrawal follows its hold.** Every `fault_withdrawn` comes after a
+   `fault_applied` for the same case whose `detail.verb` is `withhold`, one
+   withdrawal per hold. A `fault_scheduled` may have no `fault_applied`
+   after it -- a matched case that could not be applied, with a `note` --
+   so that is not a violation. `charpy replay` refuses a file that breaks
+   this: charpy did not write it, so it is a stale fixture, and replaying
+   it would report the fixture's rot as the subject's findings.
 
 ---
 

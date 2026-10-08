@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/serverplumber/charpy/internal/interpose"
 	"github.com/serverplumber/charpy/internal/transcript"
 )
 
@@ -25,8 +26,12 @@ func TestReadGoldenTranscript(t *testing.T) {
 	if n := len(got.Frames()); n != 3 {
 		t.Errorf("read %d frames, want 3", n)
 	}
-	if n := len(got.Events(transcript.FaultWithdrawn)); n != 1 {
-		t.Errorf("read %d fault_withdrawn events, want 1", n)
+	if n := len(got.Events(transcript.FaultApplied)); n != 1 {
+		t.Errorf("read %d fault_applied events, want 1", n)
+	}
+	// A truncate holds nothing, so nothing is withdrawn.
+	if n := len(got.Events(transcript.FaultWithdrawn)); n != 0 {
+		t.Errorf("read %d fault_withdrawn events, want 0", n)
 	}
 
 	// The truncated frame carries no envelope and keeps its bytes, which is
@@ -116,6 +121,74 @@ func TestReadRefusesWhatIsNotATranscript(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := transcript.Read(strings.NewReader(tc.in)); err == nil {
 				t.Errorf("accepted: %s", tc.why)
+			}
+		})
+	}
+}
+
+// A withdrawal is the release of a hold, so one with nothing held is a file
+// charpy did not write. That is a stale fixture, and it must fail as one
+// rather than replay into a finding.
+func TestReadRefusesAWithdrawalNothingWasHeldFor(t *testing.T) {
+	const header = `{"schema_version":1,"type":"header","run_id":"r","seq":0,"t_mono_ns":0,` +
+		`"t_wall":"2026-09-08T14:03:10Z","charpy_version":"t","seed":"8f2c1a","mode":"proxy",` +
+		`"subject":{"class":"server"},"redaction":"on","clock":"injected","fleet":{"clients":1}}`
+	type ev struct {
+		kind, caseID, verb string
+	}
+	file := func(events ...ev) string {
+		lines := []string{header}
+		for i, e := range events {
+			detail := "{}"
+			if e.verb != "" {
+				detail = `{"verb":"` + e.verb + `","direction":"s2c"}`
+			}
+			lines = append(lines, `{"schema_version":1,"type":"event","run_id":"r","seq":`+itoa(i+1)+
+				`,"t_mono_ns":1,"t_wall":"2026-09-08T14:03:10Z","event_kind":"`+e.kind+`","detail":`+detail+
+				`,"fault":{"case_id":"`+e.caseID+`","citation":"`+e.caseID+`@2025-11-25#seed=8f2c1a",`+
+				`"kind":"hang","params":{}}}`)
+		}
+		return strings.Join(lines, "\n") + "\n"
+	}
+	withhold := string(interpose.VerbWithhold)
+	const a, b = "lifecycle/hang-a", "lifecycle/hang-b"
+
+	refused := []struct {
+		name string
+		in   string
+	}{
+		{"a withdrawal alone", file(ev{"fault_withdrawn", a, ""})},
+		{"scheduled, then withdrawn", file(ev{"fault_scheduled", a, ""}, ev{"fault_withdrawn", a, ""})},
+		{"withdrawn before it was applied", file(
+			ev{"fault_scheduled", a, ""}, ev{"fault_withdrawn", a, ""}, ev{"fault_applied", a, withhold})},
+		{"a rewrite withdrawn", file(ev{"fault_applied", a, string(interpose.VerbRewrite)}, ev{"fault_withdrawn", a, ""})},
+		{"another case's hold", file(ev{"fault_applied", a, withhold}, ev{"fault_withdrawn", b, ""})},
+		{"one hold withdrawn twice", file(
+			ev{"fault_applied", a, withhold}, ev{"fault_withdrawn", a, ""}, ev{"fault_withdrawn", a, ""})},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := transcript.Read(strings.NewReader(tc.in))
+			if err == nil || !strings.Contains(err.Error(), "bad fixture") {
+				t.Errorf("err = %v, want a refusal naming the file a bad fixture", err)
+			}
+		})
+	}
+
+	accepted := []struct {
+		name string
+		in   string
+	}{
+		{"a hold, withdrawn", file(
+			ev{"fault_scheduled", a, ""}, ev{"fault_applied", a, withhold}, ev{"fault_withdrawn", a, ""})},
+		// What a driver writes when a matched case cannot be applied.
+		{"scheduled, never applied", file(ev{"fault_scheduled", a, ""})},
+		{"an applied fault that records no verb", file(ev{"fault_applied", a, ""}, ev{"fault_withdrawn", a, ""})},
+	}
+	for _, tc := range accepted {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := transcript.Read(strings.NewReader(tc.in)); err != nil {
+				t.Errorf("refused a sequence charpy writes: %v", err)
 			}
 		})
 	}

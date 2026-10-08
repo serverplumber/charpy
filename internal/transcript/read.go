@@ -67,6 +67,7 @@ func Read(r io.Reader) (*Transcript, error) {
 	sc.Buffer(make([]byte, 0, 64<<10), maxLine)
 
 	t := &Transcript{}
+	held := map[string]int{} // case id -> withholds applied and not yet withdrawn
 	for n := 0; sc.Scan(); n++ {
 		line := sc.Bytes()
 		if len(line) == 0 {
@@ -93,6 +94,9 @@ func Read(r io.Reader) (*Transcript, error) {
 		if e.Header != nil {
 			t.Header = e.Header
 		}
+		if err := checkWithdrawal(e.Event, held); err != nil {
+			return nil, fmt.Errorf("transcript: line %d: %w", n+1, err)
+		}
 		t.Entries = append(t.Entries, e)
 	}
 
@@ -108,6 +112,36 @@ func Read(r io.Reader) (*Transcript, error) {
 		return nil, fmt.Errorf("transcript: no header; a file whose first line is not one is not a transcript")
 	}
 	return t, nil
+}
+
+// checkWithdrawal refuses a fault_withdrawn that no withhold precedes. Every
+// withdrawal charpy writes is the release of a hold, so one with nothing held
+// is a file charpy did not write -- a hand-edited fixture gone stale -- and
+// reading it would turn the fixture's rot into findings about a subject.
+//
+// A fault_scheduled with no fault_applied after it is not refused: a driver
+// writes exactly that, with a note, when a matched case cannot be applied. And
+// a fault_applied that records no verb counts as a hold, because absence is
+// not evidence of anything.
+func checkWithdrawal(e *EventLine, held map[string]int) error {
+	if e == nil || e.Fault == nil {
+		return nil
+	}
+	id := e.Fault.CaseID
+	switch e.EventKind {
+	case FaultApplied:
+		// "withhold" is interpose.VerbWithhold, which this package cannot import.
+		if verb, ok := e.Detail["verb"].(string); !ok || verb == "withhold" {
+			held[id]++
+		}
+	case FaultWithdrawn:
+		if held[id] == 0 {
+			return fmt.Errorf("fault_withdrawn for %s with no withhold applied before it; "+
+				"charpy never writes that, so this file is a bad fixture, not a run", id)
+		}
+		held[id]--
+	}
+	return nil
 }
 
 // maxLine bounds a transcript line. RawCap caps the bytes a frame carries and

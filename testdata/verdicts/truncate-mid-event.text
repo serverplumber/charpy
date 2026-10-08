@@ -1,14 +1,14 @@
-UNTRIGGERED            fault-applied
-             the case was armed and its fault never fired
-             case: stream/truncate-mid-event@2025-11-25#seed=8f2c1a
-             No frame matched this case's [case.match], so nothing was injected. That is not a pass: the subject was never asked the question.
-             reason: no-frame-matched
 OBSERVED     seq=2     id-resolves-once
              id number:7 was never answered
              requested at seq 2, method tools/call
 OBSERVED     seq=3     id-resolves-once
              id string:anon-91 was never answered
              requested at seq 3, method tools/call
+SKIPPED      seq=6     reaction
+             the fault reached charpy's own peer, not the subject
+             case: stream/truncate-mid-event@2025-11-25#seed=8f2c1a
+             it acted on a s2c frame, which a gateway subject sends rather than receives
+             reason: fault-reached-charpy
 OBSERVED     seq=8     recovery
              the subject recovered after the fault
              probe ping answered in 120ms
