@@ -173,10 +173,6 @@ func (b *Builder) dirFromSubject() transcript.Direction {
 // receives: the question the reaction layer judges its answer to.
 func (b *Builder) FaultToSubject() *Builder { return b.applied(b.dirToSubject()) }
 
-// FaultToCharpy records a fault on a frame the subject sent, which lands on
-// charpy's own peer and puts no question to the subject at all.
-func (b *Builder) FaultToCharpy() *Builder { return b.applied(b.dirFromSubject()) }
-
 func (b *Builder) applied(dir transcript.Direction) *Builder {
 	var link *transcript.Link
 	if b.link.Via != transcript.ViaNone {

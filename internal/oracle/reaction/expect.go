@@ -30,9 +30,7 @@ func (e Expectation) declares() bool {
 // The transcript names each fault's case but not its expectations, so lookup
 // supplies them by case id -- from the catalogue of the charpy doing the
 // replay, which is how any layer written after a run judges a transcript
-// captured before it. A case that declares nothing yields nothing, and a fault
-// that reached charpy's own peer yields nothing here either: the generic
-// check has already said so.
+// captured before it. A case that declares nothing yields nothing.
 //
 // Every verdict is OBSERVED, and worded as the fact it is -- "answered with
 // -32601; the case expects -32700" -- because an expectation is the case's
@@ -49,15 +47,7 @@ func Expected(t *transcript.Transcript, lookup func(caseID string) Expectation) 
 		if applied.Fault == nil {
 			continue
 		}
-		dir, ok := applied.AppliedDirection()
-		if !ok {
-			continue
-		}
-		var face transcript.Face
-		if applied.Face != nil {
-			face = *applied.Face
-		}
-		if !oracle.SubjectReceives(class, face, dir) {
+		if _, ok := applied.AppliedDirection(); !ok {
 			continue
 		}
 		exp := lookup(applied.Fault.CaseID)
@@ -327,7 +317,7 @@ func finding(applied *transcript.EventLine) oracle.Finding {
 	return oracle.Finding{
 		Verdict:  oracle.Observed,
 		Layer:    Layer,
-		Check:    "expectation",
+		Check:    CheckExpectation,
 		Citation: applied.Fault.Citation,
 		Seq:      applied.Seq,
 	}

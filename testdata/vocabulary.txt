@@ -1,0 +1,17 @@
+coverage check fault-applied
+coverage reason no-frame-matched
+invariant check id-resolves-once
+invariant check no-duplicate-inflight-id
+invariant check no-unsolicited-response
+invariant reason charpy-replaced-the-answer
+reaction check expectation
+reaction check frame-cap
+reaction check reaction
+reaction check recovery
+reaction reason carried-call-join-inferred
+reaction reason nothing-asked-after-fault
+reaction reason question-not-asked
+reaction reason stream-error
+schema check schema
+schema reason not-applicable-to-revision
+schema reason raw-truncated

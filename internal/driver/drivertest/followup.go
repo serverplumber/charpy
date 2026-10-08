@@ -51,7 +51,7 @@ func FollowUpAnswered(t *testing.T, tr *transcript.Transcript) (question, answer
 		}
 		switch {
 		case question == nil && fr.Kind == envelope.KindRequest &&
-			oracle.SubjectReceives(class, fr.Face, fr.Direction):
+			transcript.SubjectReceives(class, fr.Face, fr.Direction):
 			if fr.Tampered() {
 				t.Fatalf("the follow-up %s at seq %d was faulted on its way to the subject", fr.MethodName(), fr.Seq)
 			}
@@ -77,7 +77,7 @@ func ReactionAnswered(t *testing.T, tr *transcript.Transcript) {
 	t.Helper()
 	var n int
 	for _, f := range reaction.Check(tr).Findings {
-		if f.Check != "reaction" {
+		if f.Check != reaction.CheckReaction {
 			continue
 		}
 		n++

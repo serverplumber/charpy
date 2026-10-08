@@ -21,7 +21,7 @@ func sample() oracle.Report {
 			{Verdict: oracle.Skipped, Layer: "invariant", Check: "session-identity-isolation",
 				Seq: -1, Summary: "no protocol session on this revision", Reason: "not-applicable-to-revision"},
 			{Verdict: oracle.Inconclusive, Layer: "invariant", Check: "id-resolves-once",
-				Seq: 3, Summary: "outstanding when the subject exited", Reason: "subject-exited-first"},
+				Seq: 3, Summary: "answered, and charpy replaced the answer", Reason: "charpy-replaced-the-answer"},
 			{Verdict: oracle.Untriggered, Layer: "invariant", Check: "stream/truncate-mid-event",
 				Seq: -1, Summary: "no frame matched", Citation: "stream/truncate-mid-event@2025-11-25#seed=8f2c1a"},
 		},
@@ -51,7 +51,7 @@ func TestEveryVerdictSurvivesDistinctly(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"MUST", "OBSERVED", "SKIPPED", "INCONCLUSIVE", "UNTRIGGERED",
-		"reason:not-applicable-to-revision", "reason:subject-exited-first"} {
+		"reason:not-applicable-to-revision", "reason:charpy-replaced-the-answer"} {
 		if !got[want] {
 			t.Errorf("the report lost %s", want)
 		}

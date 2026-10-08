@@ -11,6 +11,19 @@ import (
 // Layer is what findings from here are tagged with.
 const Layer = "reaction"
 
+// What this layer reports in, the gateway and expectation checks included.
+const (
+	CheckReaction    oracle.Check = "reaction"
+	CheckRecovery    oracle.Check = "recovery"
+	CheckFrameCap    oracle.Check = "frame-cap"
+	CheckExpectation oracle.Check = "expectation"
+
+	ReasonStreamError             oracle.Reason = "stream-error"
+	ReasonNothingAskedAfterFault  oracle.Reason = "nothing-asked-after-fault"
+	ReasonQuestionNotAsked        oracle.Reason = "question-not-asked"
+	ReasonCarriedCallJoinInferred oracle.Reason = "carried-call-join-inferred"
+)
+
 // Check reads a transcript's applied faults and probes and reports what the
 // subject did about each.
 func Check(t *transcript.Transcript) oracle.Report {
@@ -31,28 +44,17 @@ func Check(t *transcript.Transcript) oracle.Report {
 // nothing: who the fault was put to is exactly what it cannot say, and
 // guessing would be a claim about a run nobody can check.
 func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class, applied *transcript.EventLine) {
-	dir, ok := applied.AppliedDirection()
-	if !ok {
+	if _, ok := applied.AppliedDirection(); !ok {
 		return
 	}
 
-	f := oracle.Finding{Layer: Layer, Check: "reaction", Seq: applied.Seq}
+	f := oracle.Finding{Layer: Layer, Check: CheckReaction, Seq: applied.Seq}
 	if applied.Fault != nil {
 		f.Citation = applied.Fault.Citation
 	}
 
-	var face transcript.Face
-	if applied.Face != nil {
-		face = *applied.Face
-	}
-	if !oracle.SubjectReceives(class, face, dir) {
-		f.Verdict = oracle.Skipped
-		f.Summary = "the fault reached charpy's own peer, not the subject"
-		f.Detail = fmt.Sprintf("it acted on a %s frame, which a %s subject sends rather than receives", dir, class)
-		f.Reason = "fault-reached-charpy"
-		rep.Add(f)
-		return
-	}
+	// Every fault here was put to the subject: transcript.Read refuses one
+	// that landed on charpy's own peer, which the catalogue never arms.
 	if class == transcript.ClassGateway {
 		reactGateway(rep, t, applied, f)
 		return
@@ -95,7 +97,7 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 			f.Seq = e.Seq
 			f.Summary = "the stream broke on a read error after the fault"
 			f.Detail = fmt.Sprintf("%s, %s after the fault", str(e.Detail["error"]), ms(e.TMonoNS-applied.TMonoNS))
-			f.Reason = "stream-error"
+			f.Reason = ReasonStreamError
 			rep.Add(f)
 			return
 		}
@@ -122,7 +124,7 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 		}
 		switch {
 		case fr.Kind == envelope.KindRequest && !fr.Tampered() &&
-			oracle.SubjectReceives(class, fr.Face, fr.Direction):
+			transcript.SubjectReceives(class, fr.Face, fr.Direction):
 			if _, seen := asked[key]; !seen {
 				asked[key] = fr
 				if first == nil {
@@ -151,7 +153,7 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 		// failed it.
 		f.Verdict = oracle.Inconclusive
 		f.Summary = "nothing asked the subject anything after the fault"
-		f.Reason = "nothing-asked-after-fault"
+		f.Reason = ReasonNothingAskedAfterFault
 		rep.Add(f)
 		return
 	}
@@ -180,7 +182,7 @@ func recovery(rep *oracle.Report, t *transcript.Transcript) {
 		f := oracle.Finding{
 			Verdict: oracle.Observed,
 			Layer:   Layer,
-			Check:   "recovery",
+			Check:   CheckRecovery,
 			Seq:     e.Seq,
 		}
 		if outcome == transcript.ProbeOK {
@@ -216,7 +218,7 @@ func capped(rep *oracle.Report, t *transcript.Transcript, class transcript.Class
 		case transcript.FaultApplied:
 			last[conn] = e
 		case transcript.FrameCapped:
-			f := oracle.Finding{Verdict: oracle.Observed, Layer: Layer, Check: "frame-cap", Seq: e.Seq}
+			f := oracle.Finding{Verdict: oracle.Observed, Layer: Layer, Check: CheckFrameCap, Seq: e.Seq}
 			who := "the subject"
 			if !subjectSent(class, e) {
 				who = "the subject's peer"
@@ -240,7 +242,7 @@ func subjectSent(class transcript.Class, e *transcript.EventLine) bool {
 		face = *e.Face
 	}
 	dir := transcript.Direction(str(e.Detail["direction"]))
-	return dir != "" && oracle.SubjectReceives(class, face, dir.Opposite())
+	return dir != "" && transcript.SubjectReceives(class, face, dir.Opposite())
 }
 
 func cappedText(d map[string]any) string {

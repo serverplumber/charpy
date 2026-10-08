@@ -257,20 +257,6 @@ func TestAGatewayThatExitsIsReported(t *testing.T) {
 	}
 }
 
-// The gateway's upstream sends it requests; a fault on one of those, put to
-// it upstream as client to server, reached charpy's own server instead.
-func TestAFaultOnTheGatewaysOwnUpstreamRequestReachedCharpy(t *testing.T) {
-	tr := oracletest.New(t, transcript.ClassGateway).
-		Face(transcript.Upstream).Conn("u0-1").FaultToCharpy().
-		Face(transcript.Downstream).Conn("d-1").
-		ToSubject(gwPing).FromSubject(gwPingOK).
-		Done()
-
-	if f := only(t, reactions(t, tr)); f.Verdict != oracle.Skipped {
-		t.Errorf("verdict = %s, want SKIPPED", f.Verdict)
-	}
-}
-
 const (
 	carriedCall   = `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"u0_add_numbers","arguments":{"a":1,"b":0}}}`
 	carriedErr    = `{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"upstream u0 idle"}}`

@@ -599,9 +599,10 @@ same blind spot onto both faces.
 subject". Rejected: the verdict vocabulary is a public contract -- the
 JSONL report, exit codes, archived transcripts -- and a misdirected case is
 an authoring error, which belongs at load time rather than in every report.
-The reaction layer still reports such a fault as `SKIPPED` with a reason,
-for transcripts that predate the rule and for relayed runs whose traffic
-the loader cannot see.
+The reaction layer once kept a `SKIPPED` backstop for it, on the belief
+that relayed runs escaped the loader. They do not -- every case comes
+through it -- so the backstop could never fire on a run charpy wrote. It
+is gone, and the reader refuses such a transcript instead.
 
 Dropping misdirected cases at selection rather than rejecting them at load.
 Rejected: selection drops cases that are correct but inapplicable to *this*

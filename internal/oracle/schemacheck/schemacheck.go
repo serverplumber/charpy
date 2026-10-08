@@ -33,6 +33,15 @@ func root(doc any) string {
 // Layer is what findings from here are tagged with.
 const Layer = "schema"
 
+// What this layer reports in. Every MUST is the one check; which subschema
+// rejected the frame is the finding's Cites, not a check of its own.
+const (
+	CheckSchema oracle.Check = "schema"
+
+	ReasonNotApplicableToRevision oracle.Reason = "not-applicable-to-revision"
+	ReasonRawTruncated            oracle.Reason = "raw-truncated"
+)
+
 // Check validates every frame the subject originated against the vendored
 // schema for the revision that was negotiated -- on the frame's own face, when
 // the frame says. A gateway may settle different revisions with its clients
@@ -66,9 +75,9 @@ func Check(t *transcript.Transcript) (oracle.Report, error) {
 		// Skipping says so; validating against a guessed revision would
 		// produce confident findings about the wrong specification.
 		rep.Add(oracle.Finding{
-			Verdict: oracle.Skipped, Layer: Layer, Check: "schema", Seq: -1,
+			Verdict: oracle.Skipped, Layer: Layer, Check: CheckSchema, Seq: -1,
 			Summary: "no negotiated revision in the transcript header",
-			Reason:  "not-applicable-to-revision",
+			Reason:  ReasonNotApplicableToRevision,
 		})
 		return rep, nil
 	}
@@ -93,9 +102,9 @@ func Check(t *transcript.Transcript) (oracle.Report, error) {
 		}
 		if !f.Complete() {
 			rep.Add(oracle.Finding{
-				Verdict: oracle.Inconclusive, Layer: Layer, Check: "schema", Seq: f.Seq,
+				Verdict: oracle.Inconclusive, Layer: Layer, Check: CheckSchema, Seq: f.Seq,
 				Summary: "frame exceeds the transcript's byte cap and cannot be validated whole",
-				Reason:  "raw-truncated",
+				Reason:  ReasonRawTruncated,
 			})
 			continue
 		}
@@ -107,7 +116,11 @@ func Check(t *transcript.Transcript) (oracle.Report, error) {
 		if err != nil {
 			return rep, err
 		}
-		for _, finding := range validate(sch, r, f) {
+		found, err := validate(sch, r, f)
+		if err != nil {
+			return rep, err
+		}
+		for _, finding := range found {
 			rep.Add(finding)
 		}
 	}
@@ -146,13 +159,13 @@ func compile(r revision.Revision) (*jsonschema.Schema, error) {
 	return sch, nil
 }
 
-func validate(sch *jsonschema.Schema, rev revision.Revision, f *transcript.FrameLine) []oracle.Finding {
+// validate judges one frame. Bytes that do not decode are an error, not a
+// finding: transcript.Read refuses such a file, so reaching one here means the
+// transcript did not come through the reader.
+func validate(sch *jsonschema.Schema, rev revision.Revision, f *transcript.FrameLine) ([]oracle.Finding, error) {
 	raw, err := f.Bytes()
 	if err != nil {
-		return []oracle.Finding{{
-			Verdict: oracle.Inconclusive, Layer: Layer, Check: "schema", Seq: f.Seq,
-			Summary: "frame bytes cannot be decoded", Reason: err.Error(),
-		}}
+		return nil, err
 	}
 
 	inst, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
@@ -161,20 +174,20 @@ func validate(sch *jsonschema.Schema, rev revision.Revision, f *transcript.Frame
 		// documents; that a frame is not one is what the malformed kind
 		// already records, and saying it twice in different words would be
 		// two findings for one fact.
-		return nil
+		return nil, nil
 	}
 
 	verr := sch.Validate(inst)
 	if verr == nil {
-		return nil
+		return nil, nil
 	}
 
 	ve, ok := verr.(*jsonschema.ValidationError)
 	if !ok {
 		return []oracle.Finding{{
-			Verdict: oracle.Must, Layer: Layer, Check: "schema:" + rev.String(), Seq: f.Seq,
+			Verdict: oracle.Must, Layer: Layer, Check: CheckSchema, Cites: "schema:" + rev.String(), Seq: f.Seq,
 			Summary: "frame rejected by the protocol schema", Detail: verr.Error(),
-		}}
+		}}, nil
 	}
 
 	var out []oracle.Finding
@@ -182,15 +195,16 @@ func validate(sch *jsonschema.Schema, rev revision.Revision, f *transcript.Frame
 		out = append(out, oracle.Finding{
 			Verdict: oracle.Must,
 			Layer:   Layer,
+			Check:   CheckSchema,
 			// The citation the report prints: which artifact, and which part
 			// of it did the rejecting. charpy adds no opinion of its own.
-			Check:   citation(rev, cause),
+			Cites:   citation(rev, cause),
 			Seq:     f.Seq,
 			Summary: fmt.Sprintf("%s rejected by the %s schema", frameLabel(f), rev),
 			Detail:  strings.TrimSpace(cause.Error()),
 		})
 	}
-	return out
+	return out, nil
 }
 
 // citation renders where the rejection came from: the vendored artifact, the

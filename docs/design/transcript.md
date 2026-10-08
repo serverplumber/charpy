@@ -545,6 +545,14 @@ them.
    so that is not a violation. `charpy replay` refuses a file that breaks
    this: charpy did not write it, so it is a stale fixture, and replaying
    it would report the fixture's rot as the subject's findings.
+8. **A fault is put to the subject.** Every `fault_applied` that records a
+   `detail.direction` acted on a frame the subject receives: `c2s` for a
+   server, `s2c` for a client, `s2c` upstream or `c2s` downstream for a
+   gateway. The loader refuses any case that would aim elsewhere, and
+   `charpy replay` refuses a file that breaks this.
+9. **Bytes are base64.** Every `frame.raw` decodes. `charpy replay`
+   refuses a file with one that does not, rather than leave each layer to
+   decide what a frame with no bytes means.
 
 ---
 

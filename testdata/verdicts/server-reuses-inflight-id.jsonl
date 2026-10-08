@@ -1,0 +1,1 @@
+{"schema_version":1,"run_id":"01JC0F1XTVRE5REVSE1NF11GHT","verdict":"OBSERVED","layer":"invariant","check":"no-duplicate-inflight-id","seq":6,"summary":"id number:0 was requested again while still in flight","detail":"first at seq 5, again at seq 6"}

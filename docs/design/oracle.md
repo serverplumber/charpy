@@ -47,7 +47,7 @@ Plus three non-verdicts that must not be confused with passing:
 | | Meaning |
 |---|---|
 | `SKIPPED` | The case does not apply — wrong revision, wrong subject class, degraded correlation, or no reference peer that can speak the revision (`draft`, per ADR-011). Carries a reason. |
-| `INCONCLUSIVE` | The case applied but the transcript cannot support a conclusion: truncated capture, subject died first, join confidence too low. |
+| `INCONCLUSIVE` | The case applied but the transcript cannot support a conclusion: truncated capture, charpy's own rewrite in the way, join confidence too low. |
 | `UNTRIGGERED` | The case applied and the run completed, but no frame ever matched, so the fault was never injected. The normal outcome for a relayed-stimulus run (`interposer.md` §5.1) whose traffic never went where the matcher points; under owned stimulus it usually indicates a scenario bug. |
 
 A suite that reports skips as passes acquires false confidence, which is
@@ -139,9 +139,12 @@ I2 and I3 are split out of I1 rather than folded into it, because they fail
 differently and need different reproducers: I1 is a liveness/bookkeeping
 failure, I2 is a pending-map leak, I3 is an id-allocation bug.
 
-I1's "never neither" arm is evaluated at end-of-transcript against the
-request's real-time budget and against `subject_exit` — an unresolved id at
-the moment the subject died is `INCONCLUSIVE`, not a failure.
+I1's "never neither" arm is evaluated at end-of-transcript and against
+`subject_exit`. An id still unresolved at the exit is `OBSERVED` as that
+fact: who ended it -- the subject exiting, or charpy ending the run -- how
+long the id had been open, and the exit's code and signal. charpy does not
+grade it; the time open is what tells a hang that ran out the run from a
+teardown that never waited, and the developer decides which they have.
 
 ### Cancellation — one invariant, two mechanisms
 
@@ -320,13 +323,12 @@ has no generated artifact behind it.
 
 **Who was asked.** `fault_applied` records the direction of the frame the
 fault acted on (`detail.direction`), which names the recipient. A fault on
-a frame the subject _sent_ reached charpy's own peer, and the subject was
-never asked. That is reported as `SKIPPED` with reason
-`fault-reached-charpy`, never read as a pass. The loader is what keeps such
-a case out of the catalogue; this is the backstop for relayed runs and for
-transcripts that predate the rule. A `fault_applied` with no recorded
-direction predates ADR-013 and yields nothing, because who the fault was
-put to is exactly what it cannot say.
+a frame the subject _sent_ would reach charpy's own peer and ask the
+subject nothing. The loader refuses any case that would do that, relayed
+runs included, so charpy never writes one, and the reader refuses a
+transcript that has one (`transcript.md` section 8). A `fault_applied`
+with no recorded direction predates ADR-013 and yields nothing, because
+who the fault was put to is exactly what it cannot say.
 
 **The generic check, `reaction`, for every fault that reached the
 subject.** Walking forward from the fault, on its connection:
@@ -502,6 +504,16 @@ function from transcript to verdicts.
   byte-identical output. It catches map order and clock reads, which a
   single comparison against a golden file would only flake on. Both run in
   `just check`.
+- **Vocabulary**: every check and reason the oracle can report is a named
+  constant of type `oracle.Check` or `oracle.Reason` in the layer that
+  emits it, and a test over the source refuses any other way of setting
+  one. The constants are read from their declarations into
+  `testdata/vocabulary.txt`, so a verdict added, renamed or removed is a
+  diff even when no transcript reaches it; `just vocabulary` regenerates
+  the file. Every entry must also appear in some golden verdict, with no
+  list of exceptions: a new verdict lands with the transcript that reaches
+  it. A MUST's check is `schema`; the
+  subschema that rejected the frame is its `cites`.
 - **Fuzzing** the transcript reader with `testing.F`; failing inputs land
   in `testdata/fuzz/` and become permanent regression cases.
 - **The fixture gateway** (`internal/fixture/gateway`) — a minimal gateway

@@ -23,8 +23,8 @@ func TestReadGoldenTranscript(t *testing.T) {
 	if got.Header == nil || got.Header.Seed != "8f2c1a" {
 		t.Fatalf("header = %+v", got.Header)
 	}
-	if n := len(got.Frames()); n != 3 {
-		t.Errorf("read %d frames, want 3", n)
+	if n := len(got.Frames()); n != 14 {
+		t.Errorf("read %d frames, want 14", n)
 	}
 	if n := len(got.Events(transcript.FaultApplied)); n != 1 {
 		t.Errorf("read %d fault_applied events, want 1", n)
@@ -35,10 +35,12 @@ func TestReadGoldenTranscript(t *testing.T) {
 	}
 
 	// The truncated frame carries no envelope and keeps its bytes, which is
-	// the shape the malformed kind exists for.
+	// the shape the malformed kind exists for. It is the first malformed frame
+	// on the upstream face; the gateway forwards the same bytes downstream,
+	// untouched by charpy and so not attributed.
 	var cut *transcript.FrameLine
 	for _, f := range got.Frames() {
-		if f.Kind == "malformed" {
+		if f.Kind == "malformed" && f.Face == transcript.Upstream && cut == nil {
 			cut = f
 		}
 	}
@@ -97,6 +99,13 @@ func TestReadRefusesWhatIsNotATranscript(t *testing.T) {
 	const header = `{"schema_version":1,"type":"header","run_id":"r","seq":0,"t_mono_ns":0,` +
 		`"t_wall":"2026-09-08T14:03:10Z","charpy_version":"t","seed":"8f2c1a","mode":"proxy",` +
 		`"subject":{"class":"server"},"redaction":"on","clock":"injected","fleet":{"clients":1}}`
+	frame := func(seq int, raw string) string {
+		return `{"schema_version":1,"type":"frame","run_id":"r","seq":` + itoa(seq) +
+			`,"t_mono_ns":1,"t_wall":"2026-09-08T14:03:10Z","face":"downstream","direction":"c2s",` +
+			`"transport":"stdio","client_id":"c0","session_id":"s-0","conn_id":"c-0","kind":"notification",` +
+			`"id":null,"id_type":"absent","method":"notifications/initialized","raw":"` + raw + `","raw_len":3,` +
+			`"raw_truncated":false,"http":null,"link":{"via":"none","confidence":0}}`
+	}
 	note := func(seq int) string {
 		return `{"schema_version":1,"type":"event","run_id":"r","seq":` + itoa(seq) +
 			`,"t_mono_ns":1,"t_wall":"2026-09-08T14:03:10Z","event_kind":"note"}`
@@ -115,6 +124,8 @@ func TestReadRefusesWhatIsNotATranscript(t *testing.T) {
 			"a v1 reader must refuse rather than guess"},
 		{"an unknown line type", strings.Replace(header, `"type":"header"`, `"type":"sideways"`, 1), ""},
 		{"not JSON", "{", ""},
+		{"a frame whose bytes are not base64", header + "\n" + frame(1, "not base64!"),
+			"charpy writes every frame's bytes as base64"},
 	}
 
 	for _, tc := range tests {
@@ -141,7 +152,7 @@ func TestReadRefusesAWithdrawalNothingWasHeldFor(t *testing.T) {
 		for i, e := range events {
 			detail := "{}"
 			if e.verb != "" {
-				detail = `{"verb":"` + e.verb + `","direction":"s2c"}`
+				detail = `{"verb":"` + e.verb + `","direction":"c2s"}`
 			}
 			lines = append(lines, `{"schema_version":1,"type":"event","run_id":"r","seq":`+itoa(i+1)+
 				`,"t_mono_ns":1,"t_wall":"2026-09-08T14:03:10Z","event_kind":"`+e.kind+`","detail":`+detail+
@@ -189,6 +200,49 @@ func TestReadRefusesAWithdrawalNothingWasHeldFor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := transcript.Read(strings.NewReader(tc.in)); err != nil {
 				t.Errorf("refused a sequence charpy writes: %v", err)
+			}
+		})
+	}
+}
+
+// A fault is put to whoever receives its frame (ADR-013), and the catalogue
+// refuses any case whose fault would land on charpy's own peer. A file with
+// such a fault_applied is not one charpy wrote.
+func TestReadRefusesAFaultPutToCharpysOwnPeer(t *testing.T) {
+	file := func(class transcript.Class, face transcript.Face, dir transcript.Direction) string {
+		return `{"schema_version":1,"type":"header","run_id":"r","seq":0,"t_mono_ns":0,` +
+			`"t_wall":"2026-09-08T14:03:10Z","charpy_version":"t","seed":"8f2c1a","mode":"proxy",` +
+			`"subject":{"class":"` + string(class) + `"},"redaction":"on","clock":"injected","fleet":{"clients":1}}` + "\n" +
+			`{"schema_version":1,"type":"event","run_id":"r","seq":1,"t_mono_ns":1,"t_wall":"2026-09-08T14:03:10Z",` +
+			`"event_kind":"fault_applied","face":"` + string(face) + `","detail":{"verb":"rewrite","direction":"` + string(dir) + `"},` +
+			`"fault":{"case_id":"frame/x","citation":"frame/x@2025-11-25#seed=8f2c1a","kind":"malformed_json"}}` + "\n"
+	}
+	const (
+		up, down = transcript.Upstream, transcript.Downstream
+		c2s, s2c = transcript.C2S, transcript.S2C
+	)
+	for _, tc := range []struct {
+		class   transcript.Class
+		face    transcript.Face
+		dir     transcript.Direction
+		refused bool
+	}{
+		{transcript.ClassServer, down, c2s, false},
+		{transcript.ClassServer, down, s2c, true},
+		{transcript.ClassClient, up, s2c, false},
+		{transcript.ClassClient, up, c2s, true},
+		{transcript.ClassGateway, up, s2c, false},
+		{transcript.ClassGateway, down, c2s, false},
+		{transcript.ClassGateway, up, c2s, true},
+		{transcript.ClassGateway, down, s2c, true},
+	} {
+		t.Run(string(tc.class)+"/"+string(tc.face)+"/"+string(tc.dir), func(t *testing.T) {
+			_, err := transcript.Read(strings.NewReader(file(tc.class, tc.face, tc.dir)))
+			switch {
+			case tc.refused && (err == nil || !strings.Contains(err.Error(), "bad fixture")):
+				t.Errorf("err = %v, want a refusal naming the file a bad fixture", err)
+			case !tc.refused && err != nil:
+				t.Errorf("refused a fault charpy puts to the subject: %v", err)
 			}
 		})
 	}

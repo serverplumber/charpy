@@ -166,7 +166,12 @@ func text(w io.Writer, rep oracle.Report) error {
 		if f.Seq >= 0 {
 			where = fmt.Sprintf("seq=%-4d", f.Seq)
 		}
-		if _, err := fmt.Fprintf(w, "%-12s %s  %s\n", f.Verdict, where, f.Check); err != nil {
+		// What a MUST cites is the headline: it is what makes it a MUST.
+		what := string(f.Check)
+		if f.Cites != "" {
+			what = f.Cites
+		}
+		if _, err := fmt.Fprintf(w, "%-12s %s  %s\n", f.Verdict, where, what); err != nil {
 			return err
 		}
 		for _, line := range details(f) {
@@ -199,7 +204,7 @@ func details(f oracle.Finding) []string {
 		}
 	}
 	if f.Reason != "" {
-		out = append(out, "reason: "+f.Reason)
+		out = append(out, "reason: "+string(f.Reason))
 	}
 	return out
 }

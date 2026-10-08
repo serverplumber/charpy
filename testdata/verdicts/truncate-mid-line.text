@@ -1,0 +1,10 @@
+INCONCLUSIVE seq=7     id-resolves-once
+             id number:2 was answered, and charpy replaced the answer
+             requested at seq 5, replaced at seq 7
+             reason: charpy-replaced-the-answer
+INCONCLUSIVE seq=8     reaction
+             nothing asked the subject anything after the fault
+             case: stream/truncate-mid-line@2025-11-25#seed=3b7f20
+             reason: nothing-asked-after-fault
+
+0 MUST, 0 OBSERVED, 2 not judged

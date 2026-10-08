@@ -236,9 +236,9 @@ charpy's own reference peer, and the run would report nothing -- a silence
 that looks exactly like a subject that passed. So the loader refuses it:
 `direction` is required, and it must reach every subject class the case
 lists (ADR-013). The catalogue once shipped nothing but `s2c` cases, so
-none of them tested a server; the server column is `c2s` now. Where such a
-fault still turns up -- in a relayed run, or a transcript older than the
-rule -- the reaction layer reports it SKIPPED `fault-reached-charpy`.
+none of them tested a server; the server column is `c2s` now. Every run's
+cases come through the loader, relayed or not, so charpy never writes such
+a fault, and `charpy replay` refuses a transcript that has one.
 
 ______________________________________________________________________
 

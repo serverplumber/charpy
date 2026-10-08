@@ -1,0 +1,13 @@
+OBSERVED     seq=9     id-resolves-once
+             id number:3 was still outstanding when charpy ended the run, 5002ms after it was asked
+             requested at seq 9, method ping; exit at seq 11, exit code -1, signal killed
+OBSERVED     seq=8     expectation
+             the subject did not answer with an error; the case expects -32700
+             case: frame/malformed-request@2025-11-25#seed=a90c33
+INCONCLUSIVE seq=10    reaction
+             the stream broke on a read error after the fault
+             case: frame/malformed-request@2025-11-25#seed=a90c33
+             read |0: input/output error, 2ms after the fault
+             reason: stream-error
+
+0 MUST, 2 OBSERVED, 1 not judged

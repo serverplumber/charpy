@@ -28,13 +28,14 @@ type Invariant struct {
 }
 
 // registry is ordered as docs/design/oracle.md section 4 presents them,
-// I1 through I13.
+// I1 through I13. An implemented invariant is named by the check constant its
+// findings carry, so the two cannot drift apart.
 var registry = []Invariant{
-	{Name: "id-resolves-once",
+	{Name: string(CheckIDResolvesOnce),
 		Summary: "Every request id resolves exactly once — result or error, never both, never neither."},
-	{Name: "no-unsolicited-response",
+	{Name: string(CheckNoUnsolicitedResponse),
 		Summary: "No response or error carries an id that was never requested on that face."},
-	{Name: "no-duplicate-inflight-id",
+	{Name: string(CheckNoDuplicateInflightID),
 		Summary: "No two requests share an id while both are in flight on one connection."},
 	{Name: "cancel-honoured",
 		Summary: "No result is delivered for a request after its cancellation was acknowledged. On 2026-07-28 HTTP the cancellation signal is the stream close itself."},

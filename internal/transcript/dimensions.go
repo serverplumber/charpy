@@ -43,6 +43,26 @@ func (d Direction) Opposite() Direction {
 	return d
 }
 
+// SubjectReceives reports whether a frame travelling dir across face is one
+// the subject receives rather than sends. A fault on such a frame is a
+// question put to the subject; a fault on any other is put to charpy's own
+// peer, and nothing the subject does afterwards answers it
+// (docs/design/decisions.md ADR-013).
+func SubjectReceives(class Class, face Face, dir Direction) bool {
+	switch class {
+	case ClassServer:
+		return dir == C2S
+	case ClassClient:
+		return dir == S2C
+	case ClassGateway:
+		// Mirror of SubjectOriginated: what arrives on either side of itself.
+		return (face == Upstream && dir == S2C) ||
+			(face == Downstream && dir == C2S)
+	default:
+		return false
+	}
+}
+
 // Transport is how the frame travelled.
 type Transport string
 

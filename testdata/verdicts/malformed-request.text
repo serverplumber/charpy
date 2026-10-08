@@ -1,0 +1,12 @@
+OBSERVED     seq=9     id-resolves-once
+             id number:3 was still outstanding when the subject exited, 1ms after it was asked
+             requested at seq 9, method ping; exit at seq 12, exit code 1
+OBSERVED     seq=12    expectation
+             the subject exited without answering; the case expects error -32700
+             case: frame/malformed-request@2025-11-25#seed=5e1d07
+OBSERVED     seq=12    reaction
+             the subject exited after the fault
+             case: frame/malformed-request@2025-11-25#seed=5e1d07
+             exit code 1, 2ms after the fault
+
+0 MUST, 3 OBSERVED, 0 not judged

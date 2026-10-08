@@ -19,7 +19,7 @@ func errf(id string) string {
 	return `{"jsonrpc":"2.0","id":` + id + `,"error":{"code":-1,"message":"x"}}`
 }
 
-func findings(rep oracle.Report, check string) []oracle.Finding {
+func findings(rep oracle.Report, check oracle.Check) []oracle.Finding {
 	var out []oracle.Finding
 	for _, f := range rep.Findings {
 		if f.Check == check {
@@ -136,9 +136,10 @@ func TestIDResolvesOnce(t *testing.T) {
 		}
 	})
 
-	// An id outstanding when the subject died supports no conclusion. Calling
-	// that a failure would blame the subject for a transcript that stopped.
-	t.Run("outstanding when the subject exited is inconclusive", func(t *testing.T) {
+	// An id outstanding when the subject exited is reported as the fact it
+	// is, with the time it was open and how the exit came, for the reader to
+	// weigh. charpy grades nothing here.
+	t.Run("outstanding when the subject exited is observed", func(t *testing.T) {
 		got := invariant.Check(oracletest.New(t, transcript.ClassServer).
 			ToSubject(req("7", "tools/call")).SubjectExit(1).
 			Done())
@@ -147,11 +148,14 @@ func TestIDResolvesOnce(t *testing.T) {
 		if len(f) != 1 {
 			t.Fatalf("findings: %+v", f)
 		}
-		if f[0].Verdict != oracle.Inconclusive {
-			t.Errorf("verdict = %q, want INCONCLUSIVE", f[0].Verdict)
+		if f[0].Verdict != oracle.Observed {
+			t.Errorf("verdict = %q, want OBSERVED", f[0].Verdict)
 		}
-		if f[0].Reason == "" {
-			t.Error("a non-verdict with no reason is indistinguishable from a pass")
+		if !strings.Contains(f[0].Summary, "when the subject exited") {
+			t.Errorf("summary = %q, want it to say the subject exited", f[0].Summary)
+		}
+		if !strings.Contains(f[0].Detail, "tools/call") || !strings.Contains(f[0].Detail, "exit code 1") {
+			t.Errorf("detail = %q, want the method and the exit code", f[0].Detail)
 		}
 	})
 }

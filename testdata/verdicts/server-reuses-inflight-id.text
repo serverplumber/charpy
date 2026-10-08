@@ -1,0 +1,5 @@
+OBSERVED     seq=6     no-duplicate-inflight-id
+             id number:0 was requested again while still in flight
+             first at seq 5, again at seq 6
+
+0 MUST, 1 OBSERVED, 0 not judged

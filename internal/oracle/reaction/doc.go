@@ -13,8 +13,7 @@
 //
 //   - reaction: did the subject answer a request asked after the fault, stop
 //     answering, or exit? Every fault that reached the subject gets an answer,
-//     with no per-case authoring. A fault that reached charpy's own peer is
-//     SKIPPED with that reason rather than read as a pass.
+//     with no per-case authoring.
 //   - recovery: did the subject answer a probe on a fresh session once charpy
 //     stopped interfering? This was the whole of layer 4 when it was called
 //     liveness. Everyone tests that a fault does not crash the subject; almost

@@ -117,16 +117,11 @@ func TestAnHTTPStatusIsComparedWithTheExpectation(t *testing.T) {
 	}
 }
 
-// A case that declares nothing is judged by the generic tier alone, and a
-// fault that reached charpy's peer asked the subject nothing to expect of.
+// A case that declares nothing is judged by the generic tier alone.
 func TestNothingIsExpectedOfWhatWasNotAsked(t *testing.T) {
 	undeclared := destroyed(oracletest.New(t, transcript.ClassServer)).FromSubject(parseError).Done()
 	if got := reaction.Expected(undeclared, expects(reaction.Expectation{})).Findings; len(got) != 0 {
 		t.Errorf("a case declaring nothing produced %+v", got)
-	}
-	toCharpy := oracletest.New(t, transcript.ClassServer).FaultToCharpy().FromSubject(parseError).Done()
-	if got := reaction.Expected(toCharpy, expects(reaction.Expectation{ErrorCode: -32700})).Findings; len(got) != 0 {
-		t.Errorf("a fault that reached charpy produced %+v", got)
 	}
 }
 

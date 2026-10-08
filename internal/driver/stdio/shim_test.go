@@ -20,7 +20,6 @@ import (
 	"github.com/serverplumber/charpy/internal/driver/drivertest"
 	"github.com/serverplumber/charpy/internal/driver/stdio"
 	"github.com/serverplumber/charpy/internal/interpose"
-	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
 	"github.com/serverplumber/charpy/internal/wire"
@@ -481,32 +480,33 @@ func TestCasesAndArmAreExclusive(t *testing.T) {
 }
 
 // A plan that delivers the matched frame untouched beside what it injects
-// leaves that frame the subject's. Attributed, it read as tampered, and every
-// layer that judges the subject -- schema, invariants, reaction, all through
-// SubjectOriginated -- dropped the subject's real answer from its evidence.
-func TestAnUntouchedAnswerBesideADuplicateIsStillTheSubjects(t *testing.T) {
+// leaves that frame unattributed. Attributed, it read as tampered, and every
+// layer that judges the subject dropped it from its evidence: here, the
+// original request the server was asked, which the reaction layer counts as a
+// question only while it is untouched.
+func TestAnUntouchedRequestBesideADuplicateIsNotAttributed(t *testing.T) {
 	dup := interpose.Case{
-		ID:       "id/duplicate-response",
-		Citation: "id/duplicate-response@2025-11-25#seed=8f2c1a",
-		Match:    interpose.Match{Method: interpose.ParseGlob("tools/call"), Direction: transcript.S2C},
-		Fault:    interpose.Fault{Kind: "duplicate_id", Params: map[string]any{"mode": "double_response"}},
+		ID:       "id/duplicate-request-inflight",
+		Citation: "id/duplicate-request-inflight@2025-11-25#seed=8f2c1a",
+		Match:    interpose.Match{Method: interpose.ParseGlob("tools/call"), Direction: transcript.C2S, Kind: "request"},
+		Fault:    interpose.Fault{Kind: "duplicate_id", Params: map[string]any{"mode": "concurrent_request"}},
 	}
 	got := drive(t, []interpose.Case{dup}, initialize, toolsCall(2))
 
-	var own, charpys int
+	var untouched, charpys int
 	for _, f := range drivertest.Read(t, got.raw).Frames() {
-		if f.Direction != transcript.S2C || f.MethodName() != "tools/call" {
+		if f.Direction != transcript.C2S || f.MethodName() != "tools/call" {
 			continue
 		}
-		if oracle.SubjectOriginated(transcript.ClassServer, f) {
-			own++
-		} else {
+		if f.Tampered() {
 			charpys++
+		} else {
+			untouched++
 		}
 	}
-	if own != 1 || charpys != 1 {
-		t.Errorf("the subject's answers %d, charpy's %d; want the original the subject's and only the copy charpy's",
-			own, charpys)
+	if untouched != 1 || charpys != 1 {
+		t.Errorf("untouched requests %d, attributed %d; want the original untouched and only the copy charpy's",
+			untouched, charpys)
 	}
 }
 

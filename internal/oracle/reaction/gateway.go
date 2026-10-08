@@ -178,7 +178,7 @@ func reactGateway(rep *oracle.Report, t *transcript.Transcript, applied *transcr
 		if why, ok := notes[m.name]; ok {
 			f.Detail += "; charpy's client: " + why
 		}
-		f.Reason = "question-not-asked"
+		f.Reason = ReasonQuestionNotAsked
 		rep.Add(f)
 	}
 }
@@ -271,7 +271,7 @@ func carried(rep *oracle.Report, t *transcript.Transcript, applied *transcript.E
 		f.Verdict = oracle.Inconclusive
 		f.Summary = what + " is joined to it only by content"
 		f.Detail = "the gateway did not forward charpy's trace, and no verdict rests on an inferred join"
-		f.Reason = "carried-call-join-inferred"
+		f.Reason = ReasonCarriedCallJoinInferred
 		rep.Add(f)
 		return
 	}

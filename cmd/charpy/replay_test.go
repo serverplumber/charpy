@@ -106,6 +106,52 @@ func TestNoOrphanedVerdicts(t *testing.T) {
 	}
 }
 
+// The golden verdicts pin only what a golden transcript reaches, so every
+// check and reason in testdata/vocabulary.txt must appear in some golden
+// verdict. There is no list of exceptions: one would be the first thing
+// reached for, and a verdict no transcript exercises is one whose behaviour
+// nothing pins. A new verdict lands with the transcript that reaches it.
+func TestEveryVerdictIsReached(t *testing.T) {
+	reached := map[string]bool{}
+	for _, path := range goldenTranscripts(t) {
+		body, err := os.ReadFile(verdictsFile(path, "jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+			var f struct{ Layer, Check, Reason string }
+			if err := json.Unmarshal([]byte(line), &f); err != nil {
+				t.Fatalf("%s: %v", verdictsFile(path, "jsonl"), err)
+			}
+			reached[f.Layer+" check "+f.Check] = true
+			if f.Reason != "" {
+				reached[f.Layer+" reason "+f.Reason] = true
+			}
+		}
+	}
+
+	for _, v := range readLines(t, "../../testdata/vocabulary.txt") {
+		if !reached[v] {
+			t.Errorf("no golden transcript reaches %s; add one to testdata/transcripts/", v)
+		}
+	}
+}
+
+func readLines(t *testing.T, path string) []string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(string(body), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
 // The checked-in verdicts catch a change between builds; this catches
 // nondeterminism within one -- map order, a clock read -- reliably, where a
 // single comparison against a checked-in file would only flake.

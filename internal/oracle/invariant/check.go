@@ -13,6 +13,15 @@ import (
 // Layer is what findings from here are tagged with.
 const Layer = "invariant"
 
+// What this layer reports in. Each check is a registered invariant's name.
+const (
+	CheckIDResolvesOnce        oracle.Check = "id-resolves-once"
+	CheckNoUnsolicitedResponse oracle.Check = "no-unsolicited-response"
+	CheckNoDuplicateInflightID oracle.Check = "no-duplicate-inflight-id"
+
+	ReasonCharpyReplacedTheAnswer oracle.Reason = "charpy-replaced-the-answer"
+)
+
 // Check runs the universal invariants over a transcript.
 //
 // v0 ships I1 to I3, the set that holds for every revision and every subject
@@ -131,11 +140,11 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 		}
 	}
 
-	died, diedAt := subjectDied(t)
+	exit := subjectExit(t)
 
 	for _, k := range order {
 		e := exchanges[k]
-		idResolvesOnce(rep, class, e.id, e, died, diedAt)
+		idResolvesOnce(rep, class, e.id, e, exit)
 		noUnsolicitedResponse(rep, class, e.id, e)
 		noDuplicateInflightID(rep, class, e.id, e)
 	}
@@ -143,7 +152,7 @@ func checkConn(rep *oracle.Report, class transcript.Class, key connKey, t *trans
 
 // I1: every request id resolves exactly once -- result or error, never both,
 // never neither.
-func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *exchange, died bool, diedAt int64) {
+func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *exchange, exit *transcript.EventLine) {
 	if len(e.requested) == 0 {
 		return // not a request; I2 is what covers an answer to nothing
 	}
@@ -168,7 +177,7 @@ func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *ex
 	switch {
 	case len(own) > max(1, asked):
 		rep.Add(oracle.Finding{
-			Verdict: oracle.Observed, Layer: Layer, Check: "id-resolves-once",
+			Verdict: oracle.Observed, Layer: Layer, Check: CheckIDResolvesOnce,
 			Seq:     own[1].Seq,
 			Summary: fmt.Sprintf("id %s was answered %d times", id, len(own)),
 			Detail:  fmt.Sprintf("requested at seq %d, answered at %s", e.requested[0].Seq, seqs(own)),
@@ -182,30 +191,38 @@ func idResolvesOnce(rep *oracle.Report, class transcript.Class, id string, e *ex
 		// inconclusive rather than silent.
 		if len(e.replaced) > 0 {
 			rep.Add(oracle.Finding{
-				Verdict: oracle.Inconclusive, Layer: Layer, Check: "id-resolves-once",
+				Verdict: oracle.Inconclusive, Layer: Layer, Check: CheckIDResolvesOnce,
 				Seq:     e.replaced[0].Seq,
 				Summary: fmt.Sprintf("id %s was answered, and charpy replaced the answer", id),
 				Detail: fmt.Sprintf("requested at seq %d, replaced at %s",
 					e.requested[0].Seq, seqs(e.replaced)),
-				Reason: "charpy-replaced-the-answer",
+				Reason: ReasonCharpyReplacedTheAnswer,
 			})
 			return
 		}
 
-		// An id still outstanding when the subject died is not a subject that
-		// failed to answer -- it is a transcript that stopped before the
-		// answer could arrive, which supports no conclusion either way.
-		if died && e.requested[0].Seq < diedAt {
+		// An id still outstanding when the subject exited is a fact, whoever
+		// ended it: the subject leaving with a request it received, or charpy
+		// ending the run while one was open. Neither is graded here. The time
+		// from the request to the exit is what tells a hang that ran out the
+		// run from a teardown that never waited, and the reader decides.
+		if req := e.requested[0]; exit != nil && req.Seq < exit.Seq {
+			who := "the subject exited"
+			if killed, _ := exit.Detail["killed_by_charpy"].(bool); killed {
+				who = "charpy ended the run"
+			}
 			rep.Add(oracle.Finding{
-				Verdict: oracle.Inconclusive, Layer: Layer, Check: "id-resolves-once",
-				Seq:     e.requested[0].Seq,
-				Summary: fmt.Sprintf("id %s was outstanding when the subject exited", id),
-				Reason:  "subject-exited-first",
+				Verdict: oracle.Observed, Layer: Layer, Check: CheckIDResolvesOnce,
+				Seq: req.Seq,
+				Summary: fmt.Sprintf("id %s was still outstanding when %s, %dms after it was asked",
+					id, who, (exit.TMonoNS-req.TMonoNS)/1_000_000),
+				Detail: fmt.Sprintf("requested at seq %d, %s; exit at seq %d, %s",
+					req.Seq, method(req), exit.Seq, exitText(exit.Detail)),
 			})
 			return
 		}
 		rep.Add(oracle.Finding{
-			Verdict: oracle.Observed, Layer: Layer, Check: "id-resolves-once",
+			Verdict: oracle.Observed, Layer: Layer, Check: CheckIDResolvesOnce,
 			Seq:     e.requested[0].Seq,
 			Summary: fmt.Sprintf("id %s was never answered", id),
 			Detail:  fmt.Sprintf("requested at seq %d, %s", e.requested[0].Seq, method(e.requested[0])),
@@ -238,7 +255,7 @@ func replacedKey(f *transcript.FrameLine) string {
 func received(class transcript.Class, e *exchange) int {
 	n := 0
 	for _, r := range e.requested {
-		if oracle.SubjectReceives(class, r.Face, r.Direction) {
+		if transcript.SubjectReceives(class, r.Face, r.Direction) {
 			n++
 		}
 	}
@@ -270,7 +287,7 @@ func noUnsolicitedResponse(rep *oracle.Report, class transcript.Class, id string
 			continue
 		}
 		rep.Add(oracle.Finding{
-			Verdict: oracle.Observed, Layer: Layer, Check: "no-unsolicited-response",
+			Verdict: oracle.Observed, Layer: Layer, Check: CheckNoUnsolicitedResponse,
 			Seq:     a.Seq,
 			Summary: fmt.Sprintf("id %s was answered but never requested", id),
 			Detail:  fmt.Sprintf("answered at seq %d", a.Seq),
@@ -307,7 +324,7 @@ func noDuplicateInflightID(rep *oracle.Report, class transcript.Class, id string
 			continue
 		}
 		rep.Add(oracle.Finding{
-			Verdict: oracle.Observed, Layer: Layer, Check: "no-duplicate-inflight-id",
+			Verdict: oracle.Observed, Layer: Layer, Check: CheckNoDuplicateInflightID,
 			Seq:     r.Seq,
 			Summary: fmt.Sprintf("id %s was requested again while still in flight", id),
 			Detail:  fmt.Sprintf("first at seq %d, again at seq %d", e.requested[0].Seq, r.Seq),
@@ -315,13 +332,22 @@ func noDuplicateInflightID(rep *oracle.Report, class transcript.Class, id string
 	}
 }
 
-// subjectDied reports whether the subject exited, and where.
-func subjectDied(t *transcript.Transcript) (bool, int64) {
-	events := t.Events(transcript.SubjectExit)
-	if len(events) == 0 {
-		return false, 0
+// subjectExit is the transcript's first subject_exit, or nil.
+func subjectExit(t *transcript.Transcript) *transcript.EventLine {
+	if events := t.Events(transcript.SubjectExit); len(events) > 0 {
+		return events[0]
 	}
-	return true, events[0].Seq
+	return nil
+}
+
+// exitText is how a subject_exit ended: its code, and its signal if it had one.
+func exitText(d map[string]any) string {
+	code, _ := d["exit_code"].(float64)
+	s := fmt.Sprintf("exit code %d", int64(code))
+	if sig, _ := d["signal"].(string); sig != "" {
+		s += ", signal " + sig
+	}
+	return s
 }
 
 func seqs(frames []*transcript.FrameLine) string {

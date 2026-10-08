@@ -45,14 +45,31 @@ const (
 // are none of them failures either.
 func (v Verdict) Passed() bool { return v == Observed }
 
+// Check names what a finding checked: an invariant, a reaction check, a
+// layer's own family. Reason says why a non-verdict did not conclude.
+//
+// Both are vocabulary, and the vocabulary is declared: every value is a named
+// constant in the layer that emits it, and nothing else may set the field.
+// That makes the set charpy can report discoverable from declarations alone,
+// so testdata/vocabulary.txt can pin it -- a verdict added, renamed or
+// removed is a diff someone reads, even when no transcript reaches it.
+type (
+	Check  string
+	Reason string
+)
+
 // Finding is one thing a layer concluded.
 type Finding struct {
 	Verdict Verdict
 	// Layer names which of the four produced this: schema, invariant,
 	// differential or reaction.
 	Layer string
-	// Check is the invariant name, or the subschema path for a MUST.
-	Check string
+	// Check is what was checked. For a MUST it is the schema family; the
+	// subschema that rejected the frame is in Cites.
+	Check Check
+	// Cites is the normative artifact a MUST rests on: the vendored schema,
+	// the subschema within it, the keyword that failed. Empty otherwise.
+	Cites string
 	// Citation is the case this belongs to, where a case caused it.
 	Citation string
 
@@ -63,7 +80,7 @@ type Finding struct {
 	Detail  string
 	// Reason says why, for a Skipped or Inconclusive verdict. A non-verdict
 	// without one is indistinguishable from a pass to whoever reads it.
-	Reason string
+	Reason Reason
 }
 
 // Report is everything an oracle run concluded.
@@ -75,7 +92,8 @@ type Report struct {
 // Add appends a finding.
 func (r *Report) Add(f Finding) { r.Findings = append(r.Findings, f) }
 
-// Sort puts findings in a stable order: by layer, then check, then sequence.
+// Sort puts findings in a stable order: by layer, then check and what it
+// cites, then sequence.
 //
 // Determinism is the product here. `charpy replay` twice over one transcript
 // must produce byte-identical verdicts, and map iteration inside a layer must
@@ -86,6 +104,9 @@ func (r *Report) Sort() {
 			return c
 		}
 		if c := cmp.Compare(a.Check, b.Check); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.Cites, b.Cites); c != 0 {
 			return c
 		}
 		if c := cmp.Compare(a.Seq, b.Seq); c != 0 {
@@ -106,26 +127,6 @@ func (r *Report) Violations() (must, observed int) {
 		}
 	}
 	return must, observed
-}
-
-// SubjectReceives reports whether a frame travelling dir across face is one
-// the subject receives rather than sends. A fault on such a frame is a
-// question put to the subject; a fault on any other is put to charpy's own
-// peer, and nothing the subject does afterwards answers it
-// (docs/design/decisions.md ADR-013).
-func SubjectReceives(class transcript.Class, face transcript.Face, dir transcript.Direction) bool {
-	switch class {
-	case transcript.ClassServer:
-		return dir == transcript.C2S
-	case transcript.ClassClient:
-		return dir == transcript.S2C
-	case transcript.ClassGateway:
-		// Mirror of SubjectOriginated: what arrives on either side of itself.
-		return (face == transcript.Upstream && dir == transcript.S2C) ||
-			(face == transcript.Downstream && dir == transcript.C2S)
-	default:
-		return false
-	}
 }
 
 // SubjectOriginated reports whether a frame came from the subject rather than

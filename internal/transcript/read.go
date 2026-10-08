@@ -94,8 +94,19 @@ func Read(r io.Reader) (*Transcript, error) {
 		if e.Header != nil {
 			t.Header = e.Header
 		}
+		if err := checkRecipient(t.Header, e.Event); err != nil {
+			return nil, fmt.Errorf("transcript: line %d: %w", n+1, err)
+		}
 		if err := checkWithdrawal(e.Event, held); err != nil {
 			return nil, fmt.Errorf("transcript: line %d: %w", n+1, err)
+		}
+		// charpy writes every frame's bytes as base64, so a raw that is not
+		// is a file charpy did not write. Reading on would leave each layer
+		// to decide what a frame with no bytes means.
+		if e.Frame != nil {
+			if _, err := e.Frame.Bytes(); err != nil {
+				return nil, fmt.Errorf("transcript: line %d: %w; this file is a bad fixture, not a run", n+1, err)
+			}
 		}
 		t.Entries = append(t.Entries, e)
 	}
@@ -112,6 +123,31 @@ func Read(r io.Reader) (*Transcript, error) {
 		return nil, fmt.Errorf("transcript: no header; a file whose first line is not one is not a transcript")
 	}
 	return t, nil
+}
+
+// checkRecipient refuses a fault_applied whose frame the subject sent. The
+// catalogue refuses any case whose fault would land on charpy's own peer
+// rather than on the subject (ADR-013), so charpy never writes one, and a file
+// that has one is a stale fixture. One that records no direction predates
+// ADR-013 and says nothing to check.
+func checkRecipient(h *HeaderLine, e *EventLine) error {
+	if h == nil || e == nil || e.EventKind != FaultApplied {
+		return nil
+	}
+	dir, ok := e.AppliedDirection()
+	if !ok {
+		return nil
+	}
+	var face Face
+	if e.Face != nil {
+		face = *e.Face
+	}
+	if !SubjectReceives(h.Subject.Class, face, dir) {
+		return fmt.Errorf("fault_applied on a %s frame on the %s face, which a %s subject sends rather than "+
+			"receives; the catalogue refuses any case that would, so this file is a bad fixture, not a run",
+			dir, face, h.Subject.Class)
+	}
+	return nil
 }
 
 // checkWithdrawal refuses a fault_withdrawn that no withhold precedes. Every

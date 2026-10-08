@@ -52,8 +52,11 @@ func TestSchemaViolationIsAMustWithACitation(t *testing.T) {
 	if f.Verdict != oracle.Must {
 		t.Errorf("verdict = %q, want MUST", f.Verdict)
 	}
-	if !strings.HasPrefix(f.Check, "schema:2025-11-25#") {
-		t.Errorf("citation = %q; it must name the artifact and the subschema", f.Check)
+	if f.Check != schemacheck.CheckSchema {
+		t.Errorf("check = %q, want the schema family; the subschema belongs in Cites", f.Check)
+	}
+	if !strings.HasPrefix(f.Cites, "schema:2025-11-25#") {
+		t.Errorf("cites = %q; it must name the artifact and the subschema", f.Cites)
 	}
 	if f.Detail == "" {
 		t.Error("no detail; a MUST that does not say what was wrong is not reproducible")
@@ -186,8 +189,8 @@ func TestOneFindingCitingTheSubschemaThatObjected(t *testing.T) {
 				t.Fatalf("%d findings for one violation:\n%+v", len(got.Findings), got.Findings)
 			}
 			f := got.Findings[0]
-			if !strings.HasSuffix(f.Check, tc.cite) {
-				t.Errorf("cited %q, want it to end %q", f.Check, tc.cite)
+			if !strings.HasSuffix(f.Cites, tc.cite) {
+				t.Errorf("cited %q, want it to end %q", f.Cites, tc.cite)
 			}
 			if !strings.Contains(f.Detail, tc.says) {
 				t.Errorf("detail = %q, want it to mention %q", f.Detail, tc.says)
@@ -220,8 +223,8 @@ func TestAFrameIsHeldToItsOwnFacesRevision(t *testing.T) {
 		Done())
 	if len(header.Findings) == 0 || header.Findings[0].Verdict != oracle.Must {
 		t.Errorf("a batch on a frame naming no revision was not held to the header's 2025-11-25: %+v", header.Findings)
-	} else if !strings.HasPrefix(header.Findings[0].Check, "schema:2025-11-25#") {
-		t.Errorf("citation = %q, want the header's revision", header.Findings[0].Check)
+	} else if !strings.HasPrefix(header.Findings[0].Cites, "schema:2025-11-25#") {
+		t.Errorf("citation = %q, want the header's revision", header.Findings[0].Cites)
 	}
 }
 

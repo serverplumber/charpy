@@ -1,0 +1,8 @@
+OBSERVED     seq=2     id-resolves-once
+             id number:1 was still outstanding when the subject exited, 8ms after it was asked
+             requested at seq 2, method initialize; exit at seq 4, exit code 2
+SKIPPED                schema
+             no negotiated revision in the transcript header
+             reason: not-applicable-to-revision
+
+0 MUST, 1 OBSERVED, 1 not judged

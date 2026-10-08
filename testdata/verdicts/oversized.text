@@ -1,0 +1,11 @@
+OBSERVED     seq=7     id-resolves-once
+             id number:3 was still outstanding when charpy ended the run, 5040ms after it was asked
+             requested at seq 7, method tools/call; exit at seq 10, exit code -1, signal killed
+OBSERVED     seq=8     frame-cap
+             the subject sent a frame past charpy's size cap
+             a s2c frame still going after 4194304 bytes, the cap being 4194304; charpy stopped reading and relayed none of it
+INCONCLUSIVE seq=6     schema
+             frame exceeds the transcript's byte cap and cannot be validated whole
+             reason: raw-truncated
+
+0 MUST, 2 OBSERVED, 1 not judged

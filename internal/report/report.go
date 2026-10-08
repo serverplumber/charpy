@@ -28,12 +28,13 @@ func JSONL(w io.Writer, rep oracle.Report) error {
 			RunID:         rep.RunID,
 			Verdict:       string(f.Verdict),
 			Layer:         f.Layer,
-			Check:         f.Check,
+			Check:         string(f.Check),
+			Cites:         f.Cites,
 			Citation:      f.Citation,
 			Seq:           f.Seq,
 			Summary:       f.Summary,
 			Detail:        f.Detail,
-			Reason:        f.Reason,
+			Reason:        string(f.Reason),
 		}); err != nil {
 			return fmt.Errorf("report: %w", err)
 		}
@@ -47,6 +48,7 @@ type finding struct {
 	Verdict       string `json:"verdict"`
 	Layer         string `json:"layer"`
 	Check         string `json:"check"`
+	Cites         string `json:"cites,omitempty"`
 	Citation      string `json:"citation,omitempty"`
 	Seq           int64  `json:"seq"`
 	Summary       string `json:"summary"`

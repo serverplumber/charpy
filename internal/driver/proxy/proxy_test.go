@@ -74,6 +74,15 @@ func script(t *testing.T, c interpose.Case, era revision.Revision) run {
 // scriptAt is script against the subject at url.
 func scriptAt(t *testing.T, c interpose.Case, era revision.Revision, url string) run {
 	t.Helper()
+	return scriptAs(t, c, era, url, transcript.ClassServer, transcript.Downstream)
+}
+
+// scriptAs is scriptAt with the proxy on the given face of a subject of the
+// given class. Faced upstream as a gateway, it is the proxy the gateway driver
+// puts in front of each upstream: what the reference server answers is what
+// the gateway receives.
+func scriptAs(t *testing.T, c interpose.Case, era revision.Revision, url string, class transcript.Class, face transcript.Face) run {
+	t.Helper()
 
 	var buf strings.Builder
 	sched := clock.RealSched()
@@ -82,7 +91,7 @@ func scriptAt(t *testing.T, c interpose.Case, era revision.Revision, url string)
 		Run: transcript.Run{
 			CharpyVersion: "test", Seed: "8f2c1a",
 			Mode:    transcript.ModeProxy,
-			Subject: transcript.Subject{Class: transcript.ClassServer},
+			Subject: transcript.Subject{Class: class},
 			Clock:   clock.ModeReal,
 			Peer:    peer.Describe(era),
 		},
@@ -103,7 +112,7 @@ func scriptAt(t *testing.T, c interpose.Case, era revision.Revision, url string)
 			Sched:      sched,
 			Wall:       clock.NewFixedWall(time.Unix(0, 0)),
 			Ledger:     interpose.NewLedger(sched),
-			Face:       transcript.Downstream,
+			Face:       face,
 			RunSeed:    "8f2c1a",
 		},
 	})
@@ -179,9 +188,11 @@ func TestTheProxyRelaysAndTranscribes(t *testing.T) {
 
 // A truncation cutting a real SSE event mid-frame: the fault fires, the client
 // call breaks under it, and the transcript records a malformed frame -- the
-// remnant of the event the subject sent, cut in the subject's own bytes.
+// remnant of the event the server sent, cut in the server's own bytes. An SSE
+// cut is put to whoever receives the stream, so the proxy is faced upstream of
+// a gateway, as the gateway driver runs it.
 func TestATruncationCutsARealEventStream(t *testing.T) {
-	r := script(t, interpose.Case{
+	r := scriptAs(t, interpose.Case{
 		ID:       "stream/truncate-mid-event",
 		Citation: "stream/truncate-mid-event@2025-11-25#seed=8f2c1a",
 		Match: interpose.Match{
@@ -189,7 +200,7 @@ func TestATruncationCutsARealEventStream(t *testing.T) {
 			Direction: transcript.S2C,
 		},
 		Fault: interpose.Fault{Kind: "truncate", Params: map[string]any{"cut_at": "mid_event", "then": "close"}},
-	}, revision.V20251125)
+	}, revision.V20251125, subject(t), transcript.ClassGateway, transcript.Upstream)
 
 	if len(r.events(string(transcript.FaultApplied))) == 0 {
 		t.Fatalf("the truncation never fired; events: %v", r.events(string(transcript.FaultScheduled)))
@@ -211,10 +222,10 @@ func TestATruncationCutsARealEventStream(t *testing.T) {
 		t.Error("no truncated frame reached the transcript")
 	}
 
-	// And so the oracle does not file charpy's cut against the subject. The
-	// server answered the call; charpy cut the answer short. Reporting the id
-	// as never answered is the finding that would have gone into somebody
-	// else's tracker.
+	// And so the oracle does not file charpy's cut against anyone. The server
+	// answered the call; charpy cut the answer short. Reporting the id as never
+	// answered is the finding that would have gone into somebody else's
+	// tracker.
 	for _, f := range invariant.Check(drivertest.Read(t, r.raw)).Findings {
 		if f.Check != "id-resolves-once" {
 			continue
@@ -319,16 +330,14 @@ func TestAnEventBoundaryCutDeliversAWholeEvent(t *testing.T) {
 // After the fault acts, charpy's peer asks the subject one more question on
 // the same session, and the subject's answer crosses back untouched.
 //
-// The case matches every response, with no method and occurrence_every = 1,
-// so it would fault the follow-up's answer too if the matcher saw it. The fault here
-// reaches charpy's peer rather than the server, so the reaction layer rightly
-// skips it; what this pins is that the question is asked and comes back clean,
-// which is the driver's half whoever the fault was put to.
+// The case matches every request, with no method and occurrence_every = 1,
+// so it would fault the follow-up itself too if the matcher saw it. What this
+// pins is that the question is asked and comes back clean.
 func TestAFollowUpIsAskedOnTheSameSession(t *testing.T) {
 	c := interpose.Case{
-		ID:       "id/unsolicited-after-response",
-		Citation: "id/unsolicited-after-response@2025-11-25#seed=8f2c1a",
-		Match:    interpose.Match{Direction: transcript.S2C, Kind: "response", Every: 1},
+		ID:       "id/unsolicited-to-server",
+		Citation: "id/unsolicited-to-server@2025-11-25#seed=8f2c1a",
+		Match:    interpose.Match{Direction: transcript.C2S, Kind: "request", Every: 1},
 		Fault:    interpose.Fault{Kind: "unsolicited_response", Params: map[string]any{"id_source": "never_used"}},
 	}
 	r := script(t, c, revision.V20251125)

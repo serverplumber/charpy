@@ -142,6 +142,12 @@ repl transcript="testdata/transcripts/truncate-mid-event.jsonl":
 verdicts:
     {{go}} test ./cmd/charpy -run TestReplayMatchesCheckedInVerdicts -update
 
+# Only after a deliberate vocabulary change; a new entry then needs a golden
+# transcript that reaches it.
+# Regenerate testdata/vocabulary.txt from the declared checks and reasons
+vocabulary:
+    {{go}} test ./internal/oracle -run TestVocabularyMatchesCheckedIn -update
+
 # Regenerate the case-manifest JSON Schema from the registries
 case-schema:
     {{go}} run ./internal/catalogue/gencaseschema cases/case.schema.json

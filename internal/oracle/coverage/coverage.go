@@ -24,6 +24,13 @@ import (
 // Layer is what findings from here are tagged with.
 const Layer = "coverage"
 
+// What this layer reports in.
+const (
+	CheckFaultApplied oracle.Check = "fault-applied"
+
+	ReasonNoFrameMatched oracle.Reason = "no-frame-matched"
+)
+
 // Check reports an UNTRIGGERED finding for every armed case that never
 // applied a fault.
 //
@@ -50,11 +57,11 @@ func Check(t *transcript.Transcript) oracle.Report {
 		rep.Add(oracle.Finding{
 			Verdict:  oracle.Untriggered,
 			Layer:    Layer,
-			Check:    "fault-applied",
+			Check:    CheckFaultApplied,
 			Citation: citation,
 			Seq:      -1,
 			Summary:  "the case was armed and its fault never fired",
-			Reason:   "no-frame-matched",
+			Reason:   ReasonNoFrameMatched,
 			Detail: "No frame matched this case's [case.match], so nothing was injected. " +
 				"That is not a pass: the subject was never asked the question.",
 		})

@@ -1,0 +1,7 @@
+UNTRIGGERED            fault-applied
+             the case was armed and its fault never fired
+             case: frame/malformed-request-body@2025-11-25#seed=77d0a1
+             No frame matched this case's [case.match], so nothing was injected. That is not a pass: the subject was never asked the question.
+             reason: no-frame-matched
+
+0 MUST, 0 OBSERVED, 1 not judged

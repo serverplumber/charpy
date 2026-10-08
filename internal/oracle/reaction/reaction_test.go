@@ -61,24 +61,6 @@ func TestASubjectThatAnswersAfterTheFaultIsReported(t *testing.T) {
 	}
 }
 
-// A fault on a frame the subject sent lands on charpy's own peer. The subject
-// was never asked, and that is said rather than rendered as a pass.
-func TestAFaultThatReachedCharpyIsSkippedWithAReason(t *testing.T) {
-	tr := oracletest.New(t, transcript.ClassServer).
-		FaultToCharpy().
-		ToSubject(pingReq).
-		FromSubject(pingResp).
-		Done()
-
-	f := only(t, reactions(t, tr))
-	if f.Verdict != oracle.Skipped {
-		t.Errorf("verdict = %s, want SKIPPED", f.Verdict)
-	}
-	if f.Reason != "fault-reached-charpy" {
-		t.Errorf("reason = %q", f.Reason)
-	}
-}
-
 // The fault reached the subject and then nothing asked it anything. That is a
 // run which did not put the question, not a subject that failed it.
 func TestNothingAskedAfterTheFaultIsInconclusive(t *testing.T) {
