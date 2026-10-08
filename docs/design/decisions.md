@@ -798,15 +798,23 @@ changing the rule.
 `io.ReadAll`, and the SSE scanner read lines with `bufio`'s `ReadBytes`
 and buffered units until a blank line. All three are unbounded. A subject
 that streams a body forever took charpy down -- killed by the bug class it
-hunts. Where does charpy stop, and what does the run say when it has to?
+hunts. The stdio shim and the hostile stdio driver were bounded, each by a
+`bufio.Scanner` with its own 4 MiB `maxFrame`, but neither checked the
+scanner's error: a line past it ended the relay with nothing recorded, and
+a subject that ran away read as one that went quiet. Where does charpy
+stop, and what does the run say when it has to?
 
 **Decision.** Stop reading at 4 MiB a frame (`wire.MaxFrame`), record it,
 and go on. A frame past the cap gets a `frame_capped` event -- direction,
 bytes read, the cap, the first 64 KiB -- and no frame line. The proxy
 closes the subject's body and breaks the client's HTTP exchange without
 answering it (`http.ErrAbortHandler`). An event stream also gets a
-`stream_close` with reason `frame_cap`. The run ends as it would have; the
-reaction layer reports the frame as `OBSERVED`.
+`stream_close` with reason `frame_cap`. Over stdio the relays read lines
+with `wire.LineScanner`; a line past the cap gets the same event and
+`stream_close`, the far side is closed as when the sender stops, and the
+rest of the sender's pipe is drained unrelayed. The run ends as it would
+have; the reaction layer reports the frame as `OBSERVED`. Every transport
+reads to the one constant.
 
 **Why.** A sender that streams forever is a finding about that sender, not
 charpy failing, so exit 2 is wrong: it would discard the very reaction a
@@ -820,6 +828,12 @@ never ends is doing its job, and the deadline bounds it. Reads stop at
 cap+1 and report the overrun rather than truncating at the cap, because a
 body silently cut there looks exactly like a subject that cut it.
 
+Over stdio the pipe is drained rather than closed or left: closing it
+would SIGPIPE a sender still writing, an exit of charpy's making read as
+the subject's; leaving it unread blocks a sender whose oversized line does
+end, so it never reaches the end of its input and exits on its own, and
+the run waits out its deadline to kill it.
+
 **Considered.** A frame line with `raw_truncated`. Rejected: `raw_len` is
 the true length, and nobody measured one; the frame never crossed whole, so
 a frame line would say it did. A charpy-authored 502, or an error frame,
@@ -832,8 +846,10 @@ and nothing generated rejects one.
 **Cost.** A correct subject answering with a frame over 4 MiB -- a large
 `resources/read` blob -- is reported as past the cap and its exchange
 broken. The cap is generous for that reason, and the finding names the cap
-as charpy's. The 64 KiB transcript cap and the stdio shim's and hostile
-driver's own 4 MiB scanner limits are separate numbers.
+as charpy's. The 64 KiB transcript cap is a separate number: it is on what
+the transcript carries of a frame charpy read whole. A subject that never
+stops writing to stdio keeps a drain goroutine busy until it exits or the
+deadline kills it.
 
 **Revisit if.** A real subject's correct traffic reaches the cap, which
 makes it a run option rather than a constant.

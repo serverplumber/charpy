@@ -17,7 +17,6 @@
 package hostile
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,8 +35,6 @@ import (
 	"github.com/serverplumber/charpy/internal/transcript"
 	"github.com/serverplumber/charpy/internal/wire"
 )
-
-const maxFrame = 4 << 20
 
 // Options configures a hostile-server run.
 type Options struct {
@@ -209,10 +206,19 @@ func (h *Hostile) Run(ctx context.Context) error {
 }
 
 // relay carries one direction. A gate, where there is one, is passed for every
-// frame, and a shut gate ends the relay.
+// frame, and a shut gate ends the relay. So does a frame past wire.MaxFrame,
+// which is recorded, and the rest of from drained unrelayed, as the stdio
+// shim's is (Shim.capped says why it is neither closed nor left unread).
 func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool, g *gate) {
-	sc := bufio.NewScanner(from)
-	sc.Buffer(make([]byte, 0, 64<<10), maxFrame)
+	sc := wire.NewLineScanner(from)
+	defer func() {
+		var tl *wire.FrameTooLarge
+		if errors.As(sc.Err(), &tl) {
+			h.x.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
+			h.x.StreamClose(transcript.FrameCap, int(to.Written()))
+			go func() { _, _ = io.Copy(io.Discard, from) }()
+		}
+	}()
 
 	for sc.Scan() {
 		raw := sc.Bytes()

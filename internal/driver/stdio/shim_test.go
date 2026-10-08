@@ -23,6 +23,7 @@ import (
 	"github.com/serverplumber/charpy/internal/oracle"
 	"github.com/serverplumber/charpy/internal/revision"
 	"github.com/serverplumber/charpy/internal/transcript"
+	"github.com/serverplumber/charpy/internal/wire"
 )
 
 // The subject. Re-execing the test binary keeps the fixture in one file and
@@ -98,6 +99,14 @@ func subject() int {
 			continue
 		}
 		if probe.Method == "" || len(probe.ID) == 0 {
+			continue
+		}
+
+		if probe.Method == "tools/call" && os.Getenv(subjectEnv) == "runaway" {
+			// One answer past charpy's read cap, and then on as before: a
+			// subject whose oversized line does end.
+			fmt.Printf(`{"jsonrpc":"2.0","id":%s,"result":{"blob":"%s"}}`+"\n",
+				probe.ID, strings.Repeat("x", wire.MaxFrame+1<<20))
 			continue
 		}
 
@@ -498,5 +507,37 @@ func TestAnUntouchedAnswerBesideADuplicateIsStillTheSubjects(t *testing.T) {
 	if own != 1 || charpys != 1 {
 		t.Errorf("the subject's answers %d, charpy's %d; want the original the subject's and only the copy charpy's",
 			own, charpys)
+	}
+}
+
+// A subject answer past the read cap is recorded and not relayed, and the
+// subject, drained rather than cut off, exits as itself once its input ends.
+func TestShimRecordsAFramePastTheCap(t *testing.T) {
+	r := driveWith(t, func(o *stdio.Options) {
+		o.Env = append(os.Environ(), subjectEnv+"=runaway")
+	}, initialize, toolsCall(2))
+
+	capped := r.events(string(transcript.FrameCapped))
+	if len(capped) != 1 || capped[0]["detail"].(map[string]any)["direction"] != "s2c" {
+		t.Fatalf("frame_capped events: %v, want one s2c", capped)
+	}
+	var closed bool
+	for _, e := range r.events(string(transcript.StreamClose)) {
+		if e["detail"].(map[string]any)["reason"] == string(transcript.FrameCap) {
+			closed = true
+		}
+	}
+	if !closed {
+		t.Error("no stream_close with reason frame_cap")
+	}
+	if strings.Contains(r.toPeer, `"blob"`) {
+		t.Error("the peer was sent part of a frame charpy capped")
+	}
+	exits := r.events(string(transcript.SubjectExit))
+	if len(exits) != 1 {
+		t.Fatalf("subject_exit events: %d", len(exits))
+	}
+	if d := exits[0]["detail"].(map[string]any); d["killed_by_charpy"] != false || d["exit_code"] != float64(0) {
+		t.Errorf("subject exit = %v, want its own clean exit: charpy drained it, and did not kill it", d)
 	}
 }

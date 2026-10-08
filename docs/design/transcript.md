@@ -446,13 +446,17 @@ fault's: the stream was closed because a unit on it passed the read cap,
 and a bare `charpy_close` would credit a case with it.
 
 A frame past the read cap is a finding about its sender, never a failed
-run (`decisions.md` ADR-017). charpy records the `frame_capped` event,
-closes the subject's body, and breaks the client's HTTP exchange without
-answering it: any answer charpy wrote there would be charpy's, posing as
-the subject's. An event stream also gets its `stream_close`, reason
-`frame_cap`. The cap is per unit, not per stream: an endless stream of
-well-formed events is a stream doing its job, and the run's deadline
-bounds it.
+run (`decisions.md` ADR-017). Every transport reads to the same cap. Over
+HTTP, charpy records the `frame_capped` event, closes the subject's body,
+and breaks the client's HTTP exchange without answering it: any answer
+charpy wrote there would be charpy's, posing as the subject's. An event
+stream also gets its `stream_close`, reason `frame_cap`. Over stdio, the
+direction's stream is closed with reason `frame_cap` and the rest of the
+sender's pipe is drained unrelayed -- neither closed, which would SIGPIPE
+the sender and make its exit charpy's doing, nor left unread, which would
+block a sender whose long line does end. The cap is per unit, not per
+stream: an endless stream of well-formed events is a stream doing its
+job, and the run's deadline bounds it.
 
 ---
 

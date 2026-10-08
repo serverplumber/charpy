@@ -1,7 +1,6 @@
 package stdio
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -21,11 +20,6 @@ import (
 	"github.com/serverplumber/charpy/internal/transcript"
 	"github.com/serverplumber/charpy/internal/wire"
 )
-
-// maxFrame is how large a single frame may be. bufio's default of 64 KiB is
-// smaller than a tools/list result with real schemas in it, and a scanner that
-// stops mid-catalogue would look exactly like a subject that did.
-const maxFrame = 4 << 20
 
 // Options configures a shim.
 type Options struct {
@@ -287,10 +281,10 @@ func signalOf(st *os.ProcessState) (string, bool) {
 }
 
 // relay reads frames from one side and puts them on the other, offering each
-// to the matcher on the way.
+// to the matcher on the way. A frame past wire.MaxFrame ends it (capped).
 func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
-	sc := bufio.NewScanner(from)
-	sc.Buffer(make([]byte, 0, 64<<10), maxFrame)
+	sc := wire.NewLineScanner(from)
+	defer s.capped(sc, from, dir, to)
 
 	for sc.Scan() {
 		raw := sc.Bytes()
@@ -317,6 +311,30 @@ func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
 
 		s.deliver(m, dir, to, nil)
 	}
+}
+
+// capped records a frame past wire.MaxFrame, if that is what ended a relay,
+// and marks the stream broken: the caller closes it, and there is no session
+// left on it to ask.
+//
+// charpy stops relaying but not reading: the rest of from is drained and
+// dropped. Closing the pipe would SIGPIPE a sender still writing, and the exit
+// would be charpy's doing read as the subject's. Leaving it unread would block
+// a sender whose oversized line does end, so it could never reach the end of
+// its input and exit on its own. Drained, a subject that stops exits as
+// itself, and one that never stops ends at the run's deadline, killed by
+// charpy and recorded so.
+func (s *Shim) capped(sc *wire.LineScanner, from io.Reader, dir transcript.Direction, to *wire.Stdio) {
+	var tl *wire.FrameTooLarge
+	if !errors.As(sc.Err(), &tl) {
+		return
+	}
+	s.faulting.Lock()
+	s.broken = true
+	s.faulting.Unlock()
+	s.x.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
+	s.x.StreamClose(transcript.FrameCap, int(to.Written()))
+	go func() { _, _ = io.Copy(io.Discard, from) }()
 }
 
 // Askable reports whether a follow-up question can be put to the subject on

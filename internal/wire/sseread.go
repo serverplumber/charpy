@@ -53,7 +53,7 @@ func (s *SSEScanner) Scan() bool {
 	)
 
 	for {
-		line, err := s.readLine(MaxFrame - buf.Len())
+		line, err := readLine(s.r, MaxFrame-buf.Len())
 		if tl, ok := err.(*FrameTooLarge); ok {
 			// Not yielded, unlike a stream that ends mid-unit: the subject did
 			// not stop here, charpy did, and relaying the part read would put
@@ -101,24 +101,6 @@ func (s *SSEScanner) Scan() bool {
 				return s.emit(buf.Bytes(), body, dataStart, haveData, isComment)
 			}
 			return false
-		}
-	}
-}
-
-// readLine reads through the next newline, or to the end of the stream, and
-// fails with a *FrameTooLarge once the line passes limit. bufio's ReadBytes
-// would grow without bound on a line that never ends, and so would anything
-// built on it.
-func (s *SSEScanner) readLine(limit int) ([]byte, error) {
-	var line []byte
-	for {
-		chunk, err := s.r.ReadSlice('\n')
-		line = append(line, chunk...)
-		if len(line) > limit {
-			return nil, &FrameTooLarge{Read: len(line), Prefix: line}
-		}
-		if err != bufio.ErrBufferFull {
-			return line, err
 		}
 	}
 }

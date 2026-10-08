@@ -100,3 +100,39 @@ func (r *repeater) Read(p []byte) (int, error) {
 	}
 	return n, nil
 }
+
+// The line scanner splits as bufio's line splitter does: newline and a
+// carriage return before it dropped, empty lines kept, a last line with no
+// newline yielded.
+func TestLineScannerSplitsAsBufioDoes(t *testing.T) {
+	sc := wire.NewLineScanner(strings.NewReader("a\r\n\nb\nc"))
+	var got []string
+	for sc.Scan() {
+		got = append(got, string(sc.Bytes()))
+	}
+	if sc.Err() != nil {
+		t.Fatal(sc.Err())
+	}
+	if want := []string{"a", "", "b", "c"}; strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+// A stdio line that never ends is stopped at the cap with its prefix, where a
+// bufio.Scanner would report ErrTooLong and keep nothing.
+func TestLineScannerStopsALineThatNeverEnds(t *testing.T) {
+	sc := wire.NewLineScanner(io.MultiReader(strings.NewReader("{\"jsonrpc\":\"2.0\"}\n{\"x\":\""), endless{'x'}))
+	if !sc.Scan() || string(sc.Bytes()) != `{"jsonrpc":"2.0"}` {
+		t.Fatalf("first line not yielded whole")
+	}
+	if sc.Scan() {
+		t.Fatal("scanned the line past the cap")
+	}
+	var tl *wire.FrameTooLarge
+	if !errors.As(sc.Err(), &tl) {
+		t.Fatalf("err = %v, want *FrameTooLarge", sc.Err())
+	}
+	if !bytes.HasPrefix(tl.Prefix, []byte(`{"x":"xxx`)) || tl.Read <= wire.MaxFrame {
+		t.Errorf("read %d, prefix %q", tl.Read, tl.Prefix[:min(20, len(tl.Prefix))])
+	}
+}
