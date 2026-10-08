@@ -19,5 +19,5 @@
 // The peer's era is a constructor parameter, per docs/design/interposer.md
 // section 1 -- mcp.ClientSessionOptions.ProtocolVersion for a client peer,
 // mcp.ServerOptions.SupportedProtocolVersions for a server one. Both are
-// exported only as of v1.8.0-pre.2, which is why ADR-011 pins a pre-release.
+// exported only as of v1.8.0, which is why ADR-011 pins no earlier.
 package peer

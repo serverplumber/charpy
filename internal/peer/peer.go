@@ -23,7 +23,7 @@ import (
 const Module = "github.com/modelcontextprotocol/go-sdk"
 
 // Version is the pinned version, kept in step with go.mod by TestPinMatchesGoMod.
-const Version = "v1.8.0-pre.2"
+const Version = "v1.8.0"
 
 // Options configures a client peer.
 type Options struct {

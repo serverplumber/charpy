@@ -304,7 +304,7 @@ func TestHeaderNamesTheReferencePeer(t *testing.T) {
 	r := newRig(t, func(o *transcript.Options) {
 		o.Run.Peer = &transcript.Peer{
 			Module:  "github.com/modelcontextprotocol/go-sdk",
-			Version: "v1.8.0-pre.2",
+			Version: "v1.8.0",
 			Era:     revision.V20250618,
 		}
 	})
@@ -316,7 +316,7 @@ func TestHeaderNamesTheReferencePeer(t *testing.T) {
 	if !ok {
 		t.Fatalf("header carries no peer object: %s", lines[0])
 	}
-	if got := peer["version"].(string); got != "v1.8.0-pre.2" {
+	if got := peer["version"].(string); got != "v1.8.0" {
 		t.Errorf("peer version = %q, want the pin", got)
 	}
 	// The era charpy asked for, not the revision the run negotiated. Those

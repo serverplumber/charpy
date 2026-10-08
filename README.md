@@ -270,12 +270,34 @@ as `conformance` on the path. With Nix, `nix-shell` (or direnv, through
 suite comes from a flake, so the `flakes` feature must be enabled.
 
 The reference peer — the always-correct side of every run charpy originates
-— is `github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod`. It is a
-pre-release pin while v1.8.0 is unreleased, because the exported era
-controls charpy's design depends on land there;
-[ADR-011](docs/design/decisions.md) records the reasoning and what the
-alternative would have cost. The TypeScript and Python peers arrive with
-the cross-SDK differential.
+— is `github.com/modelcontextprotocol/go-sdk`, pinned in `go.mod` to
+v1.8.0. The release before it, v1.7.0, cannot speak an era it is told to,
+on either face:
+
+- **The client always opens at 2026-07-28.**
+  `ClientSessionOptions.protocolVersion` is unexported and marked for
+  testing, and when `server/discover` fails the client falls back to a
+  legacy `initialize` hardcoded at 2025-11-25.
+- **The server ignores its own supported set.** The legacy handler
+  negotiates from the client's version alone and never consults the
+  transport's supported versions.
+
+Rewriting `protocolVersion` on the wire instead would not work: the
+client's capabilities depend on the version (elicitation `form` is gated
+at 2025-11-25 and later), so every older-era run would carry a capability
+its era does not have — an undeclared fault under every case. v1.8.0
+exports `ClientSessionOptions.ProtocolVersion` and
+`ServerOptions.SupportedProtocolVersions`, and negotiates against the
+server's set. charpy pinned its pre-release for them first.
+[ADR-011](docs/design/decisions.md) records the reasoning.
+
+v1.8.0 carries one known bug: the client rejects a valid titled
+multi-select elicitation, which the SDK's own everything-server sends
+([go-sdk#1309](https://github.com/modelcontextprotocol/go-sdk/issues/1309),
+fixed after the pin). The fixture gateway works around it until the pin
+moves.
+
+The TypeScript and Python peers arrive with the cross-SDK differential.
 
 ## License
 

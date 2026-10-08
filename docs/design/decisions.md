@@ -459,6 +459,11 @@ not a crash.
   dependencies. `go.sum` pins all of it, so hermeticity holds, but it is a
   step change worth stating rather than discovering.
 
+**Moved, 2026-10-08.** v1.8.0 is tagged on the same commit as
+v1.8.0-pre.2 (`3f3b699`), so the pin is v1.8.0 and nothing else changed:
+the exported options and the negotiation against the server's set are as
+above, and the revisit condition below did not fire.
+
 **Revisit if.** v1.8.0 ships without the exported era options, or ships
 them with different semantics — then the pin stays at the pre-release and
 this ADR records why. Or the byte seam proves unable to express something

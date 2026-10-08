@@ -473,7 +473,7 @@ Exactly one, first.
   "mode": "proxy",                  // proxy | hostile-server | stdio-ingress | inproc
   "subject": { "class": "gateway", "descriptor": "http://localhost:8080/mcp" },
   "peer": { "module": "github.com/modelcontextprotocol/go-sdk",   // absent under relay
-            "version": "v1.8.0-pre.2", "era": "2025-11-25" },
+            "version": "v1.8.0", "era": "2025-11-25" },
   "revision": { "negotiated": "2025-11-25", "offered": ["2026-07-28", "2025-11-25"],
                 "how": "initialize" },
   "policy_digest": "sha256:...",

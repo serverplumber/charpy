@@ -60,7 +60,7 @@ needs a coherent 2026-07-28 peer gets one by instantiating the SDK in its
 stateless configuration, not by translating a sessioned conversation on the
 fly. Coherence comes from configuration; incoherence comes from corruption;
 nothing comes from translation (§4). Both options are exported only as of
-v1.8.0-pre.2; ADR-011 records what the alternative cost, which was an
+v1.8.0; ADR-011 records what the alternative cost, which was an
 undeclared capability fault on every legacy-era run.
 
 **The peer speaks the five dated revisions and not `draft`.**

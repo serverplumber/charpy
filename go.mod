@@ -4,7 +4,7 @@ go 1.26.5
 
 require (
 	github.com/creachadair/mds v0.31.0
-	github.com/modelcontextprotocol/go-sdk v1.8.0-pre.2
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/yosida95/uritemplate/v3 v3.0.2

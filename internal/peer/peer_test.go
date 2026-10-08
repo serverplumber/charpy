@@ -158,8 +158,8 @@ func TestCharpyReadsTheBytesTheSDKWrote(t *testing.T) {
 	}
 }
 
-// The era is a constructor parameter, which is the promise ADR-011 pinned a
-// pre-release to keep. Asking for a sessioned era must put that version on the
+// The era is a constructor parameter, which is the promise ADR-011 pinned
+// v1.8.0 to keep. Asking for a sessioned era must put that version on the
 // wire through the legacy handshake, not the SDK's stateless latest -- and on
 // v1.7.0 this test could not have passed, which is what the pin bought.
 func TestTheEraAskedForIsTheEraOnTheWire(t *testing.T) {
