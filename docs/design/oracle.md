@@ -491,10 +491,16 @@ function from transcript to verdicts.
   cases that distinguish `SKIPPED` from `INCONCLUSIVE`. These are written
   by hand precisely so they are not co-generated with the code that reads
   them.
-- **Golden verdicts** beside each, compared byte for byte.
+- **Golden verdicts** for each, one file per report format in
+  `testdata/verdicts/`, compared byte for byte. A commit that changes a
+  verdict fails until `just verdicts` regenerates them, so the change lands
+  as a diff in the same commit. A transcript without its verdicts fails, as
+  does a verdicts file without its transcript.
 - **Determinism gate**: `charpy replay` over every transcript in
-  `testdata/transcripts/`, twice, must produce byte-identical output.
-  Enforced by `just check`.
+  `testdata/transcripts/`, twice within one build, must produce
+  byte-identical output. It catches map order and clock reads, which a
+  single comparison against a golden file would only flake on. Both run in
+  `just check`.
 - **Fuzzing** the transcript reader with `testing.F`; failing inputs land
   in `testdata/fuzz/` and become permanent regression cases.
 - **The fixture gateway** (`internal/fixture/gateway`) — a minimal gateway

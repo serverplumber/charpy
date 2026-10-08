@@ -1,0 +1,11 @@
+OBSERVED     seq=3     id-resolves-once
+             id number:2 was answered 2 times
+             requested at seq 1, answered at seq 2, 3
+OBSERVED     seq=4     no-unsolicited-response
+             id number:9999 was answered but never requested
+             answered at seq 4
+MUST         seq=2     schema:2025-11-25#/$defs/Result/type
+             response tools/call rejected by the 2025-11-25 schema
+             at '/result': got string, want object
+
+1 MUST, 2 OBSERVED, 0 not judged

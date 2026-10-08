@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"flag"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,12 +15,33 @@ import (
 // Written by hand rather than captured, because an oracle tested only on
 // files charpy produced would agree with charpy about anything charpy got
 // wrong.
-const misbehaving = `{"schema_version":1,"type":"header","run_id":"01TEST","seq":0,"t_mono_ns":0,"t_wall":"2026-09-11T00:00:00.000000000Z","charpy_version":"t","seed":"8f2c1a","mode":"stdio-ingress","subject":{"class":"server"},"revision":{"negotiated":"2025-11-25","how":"initialize"},"redaction":"on","clock":"real","fleet":{"clients":1}}
-{"schema_version":1,"type":"frame","run_id":"01TEST","seq":1,"t_mono_ns":1,"t_wall":"2026-09-11T00:00:00.000000000Z","face":"downstream","direction":"c2s","transport":"stdio","client_id":"c0","session_id":"s-1","conn_id":"c-1","kind":"request","id":"2","id_type":"number","method":"tools/call","raw":"eyJqc29ucnBjIjoiMi4wIiwiaWQiOjIsIm1ldGhvZCI6InRvb2xzL2NhbGwifQ==","raw_len":45,"raw_truncated":false,"http":null,"link":{"via":"none","confidence":0}}
-{"schema_version":1,"type":"frame","run_id":"01TEST","seq":2,"t_mono_ns":2,"t_wall":"2026-09-11T00:00:00.000000000Z","face":"downstream","direction":"s2c","transport":"stdio","client_id":"c0","session_id":"s-1","conn_id":"c-1","kind":"response","id":"2","id_type":"number","method":"tools/call","raw":"eyJqc29ucnBjIjoiMi4wIiwiaWQiOjIsInJlc3VsdCI6ImEgc3RyaW5nIn0=","raw_len":43,"raw_truncated":false,"http":null,"link":{"via":"none","confidence":0}}
-{"schema_version":1,"type":"frame","run_id":"01TEST","seq":3,"t_mono_ns":3,"t_wall":"2026-09-11T00:00:00.000000000Z","face":"downstream","direction":"s2c","transport":"stdio","client_id":"c0","session_id":"s-1","conn_id":"c-1","kind":"response","id":"2","id_type":"number","method":"tools/call","raw":"eyJqc29ucnBjIjoiMi4wIiwiaWQiOjIsInJlc3VsdCI6e319","raw_len":36,"raw_truncated":false,"http":null,"link":{"via":"none","confidence":0}}
-{"schema_version":1,"type":"frame","run_id":"01TEST","seq":4,"t_mono_ns":4,"t_wall":"2026-09-11T00:00:00.000000000Z","face":"downstream","direction":"s2c","transport":"stdio","client_id":"c0","session_id":"s-1","conn_id":"c-1","kind":"response","id":"9999","id_type":"number","method":null,"raw":"eyJqc29ucnBjIjoiMi4wIiwiaWQiOjk5OTksInJlc3VsdCI6e319","raw_len":39,"raw_truncated":false,"http":null,"link":{"via":"none","confidence":0}}
-`
+const misbehaving = "../../testdata/transcripts/misbehaving.jsonl"
+
+// The expected output of every golden transcript, one file per format, named
+// after the transcript. Not beside it: a .jsonl here would be globbed as a
+// transcript.
+const verdictsDir = "../../testdata/verdicts"
+
+var update = flag.Bool("update", false, "rewrite testdata/verdicts from the current oracle")
+
+var formats = []string{"text", "jsonl"}
+
+func goldenTranscripts(t *testing.T) []string {
+	t.Helper()
+	paths, err := filepath.Glob("../../testdata/transcripts/*.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A gate over no files passes, so an empty or moved testdata/ must fail.
+	if len(paths) == 0 {
+		t.Fatal("no golden transcripts found")
+	}
+	return paths
+}
+
+func verdictsFile(transcript, format string) string {
+	return filepath.Join(verdictsDir, strings.TrimSuffix(filepath.Base(transcript), ".jsonl")+"."+format)
+}
 
 func writeTranscript(t *testing.T, body string) string {
 	t.Helper()
@@ -37,23 +59,59 @@ func replay(t *testing.T, args ...string) (string, int) {
 	return out.String(), code
 }
 
-// The determinism guarantee charpy actually ships. ADR-001 calls this a gate
-// rather than an aspiration: runs against a live subject cannot be made
-// reproducible, and verdicts must be, forever. It covers the hand-written
-// transcript above and every golden transcript in testdata/.
-func TestReplayIsByteIdentical(t *testing.T) {
-	golden, err := filepath.Glob("../../testdata/transcripts/*.jsonl")
+// The guarantee ADR-001 makes: verdicts from a transcript do not change.
+// Each golden transcript's output is checked in, so a commit that changes a
+// verdict fails here until the new output is regenerated with just verdicts
+// and committed -- the change is then a diff someone read, not a drift.
+func TestReplayMatchesCheckedInVerdicts(t *testing.T) {
+	for _, path := range goldenTranscripts(t) {
+		for _, format := range formats {
+			want := verdictsFile(path, format)
+			t.Run(filepath.Base(want), func(t *testing.T) {
+				got, _ := replay(t, "--format", format, path)
+				if *update {
+					if err := os.WriteFile(want, []byte(got), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					return
+				}
+				expected, err := os.ReadFile(want)
+				if err != nil {
+					t.Fatalf("%v: every golden transcript needs its verdicts checked in; run just verdicts", err)
+				}
+				if got != string(expected) {
+					t.Errorf("verdicts differ from %s:\n--- want\n%s\n--- got\n%s", want, expected, got)
+				}
+			})
+		}
+	}
+}
+
+// A verdicts file whose transcript is gone would never be compared again.
+func TestNoOrphanedVerdicts(t *testing.T) {
+	expected := map[string]bool{}
+	for _, path := range goldenTranscripts(t) {
+		for _, format := range formats {
+			expected[verdictsFile(path, format)] = true
+		}
+	}
+	files, err := filepath.Glob(filepath.Join(verdictsDir, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A gate over no files passes, so an empty or moved testdata/ must fail.
-	if len(golden) == 0 {
-		t.Fatal("no golden transcripts found")
+	for _, f := range files {
+		if !expected[f] {
+			t.Errorf("%s matches no golden transcript and format", f)
+		}
 	}
-	paths := append([]string{writeTranscript(t, misbehaving)}, golden...)
+}
 
-	for _, path := range paths {
-		for _, format := range []string{"text", "jsonl"} {
+// The checked-in verdicts catch a change between builds; this catches
+// nondeterminism within one -- map order, a clock read -- reliably, where a
+// single comparison against a checked-in file would only flake.
+func TestReplayIsByteIdentical(t *testing.T) {
+	for _, path := range goldenTranscripts(t) {
+		for _, format := range formats {
 			t.Run(filepath.Base(path)+"/"+format, func(t *testing.T) {
 				first, code := replay(t, "--format", format, path)
 				second, again := replay(t, "--format", format, path)
@@ -70,7 +128,7 @@ func TestReplayIsByteIdentical(t *testing.T) {
 }
 
 func TestReplayFindsWhatTheSubjectDidWrong(t *testing.T) {
-	out, code := replay(t, writeTranscript(t, misbehaving))
+	out, code := replay(t, misbehaving)
 
 	// A MUST fails the build; OBSERVED findings are reported without charpy
 	// deciding whether they are acceptable.
@@ -90,7 +148,11 @@ func TestReplayFindsWhatTheSubjectDidWrong(t *testing.T) {
 }
 
 func TestReplayCleanTranscriptExitsZero(t *testing.T) {
-	clean := strings.Join(strings.Split(misbehaving, "\n")[:2], "\n") + "\n"
+	body, err := os.ReadFile(misbehaving)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clean := strings.Join(strings.Split(string(body), "\n")[:2], "\n") + "\n"
 	out, code := replay(t, writeTranscript(t, clean))
 
 	if code != exitClean {
@@ -99,7 +161,7 @@ func TestReplayCleanTranscriptExitsZero(t *testing.T) {
 }
 
 func TestReplayFormats(t *testing.T) {
-	path := writeTranscript(t, misbehaving)
+	path := misbehaving
 
 	t.Run("jsonl is one finding per line", func(t *testing.T) {
 		out, _ := replay(t, "--format", "jsonl", path)
@@ -136,7 +198,7 @@ func TestReplayRefusesWhatIsNotATranscript(t *testing.T) {
 // A single layer can be run alone, which is how an invariant written next
 // month is checked against transcripts captured today.
 func TestReplayOneLayer(t *testing.T) {
-	path := writeTranscript(t, misbehaving)
+	path := misbehaving
 
 	schemaOnly, _ := replay(t, "--oracle", "schema", path)
 	if strings.Contains(schemaOnly, "id-resolves-once") {

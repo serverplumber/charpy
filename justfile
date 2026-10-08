@@ -79,11 +79,12 @@ _go-files:
     git ls-files --cached --others --exclude-standard '*.go' |
         while read -r f; do if [ -e "$f" ]; then echo "$f"; fi; done
 
-# The determinism guarantee, as a gate rather than an aspiration: replaying a
-# transcript twice must produce byte-identical verdicts (decisions.md ADR-001).
-# Replay every test transcript twice and require byte-identical verdicts
+# The determinism guarantee, as a gate rather than an aspiration (decisions.md
+# ADR-001): every golden transcript replays to its checked-in verdicts, and to
+# the same bytes twice within one build.
+# Replay every golden transcript against its checked-in verdicts
 determinism:
-    {{go}} test ./cmd/charpy -run TestReplayIsByteIdentical -v
+    {{go}} test ./cmd/charpy -run 'TestReplayMatchesCheckedInVerdicts|TestNoOrphanedVerdicts|TestReplayIsByteIdentical' -v
 
 # Validate the shipped case catalogue
 cases:
@@ -135,6 +136,11 @@ repl transcript="testdata/transcripts/truncate-mid-event.jsonl":
 # -----------------------------
 # Maintain
 # -----------------------------
+
+# Only after a deliberate verdict change: the diff it leaves is the change.
+# Regenerate testdata/verdicts from the current oracle
+verdicts:
+    {{go}} test ./cmd/charpy -run TestReplayMatchesCheckedInVerdicts -update
 
 # Regenerate the case-manifest JSON Schema from the registries
 case-schema:
