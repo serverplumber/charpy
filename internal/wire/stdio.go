@@ -1,6 +1,9 @@
 package wire
 
-import "io"
+import (
+	"io"
+	"sync/atomic"
+)
 
 // Stdio is a newline-delimited stream over a pipe: a subprocess's stdin, or
 // charpy's own stdout when it is the server behind a stdio shim.
@@ -9,7 +12,8 @@ import "io"
 // already partial on the wire. That is the whole difference from SSE, where a
 // cut is invisible unless it is flushed.
 type Stdio struct {
-	w io.WriteCloser
+	w      io.WriteCloser
+	closed atomic.Bool
 	counter
 }
 
@@ -31,4 +35,11 @@ func (s *Stdio) Flush() error { return nil }
 // frame that never delimits blocks instead of seeing the stream end. Those
 // find different bugs, and both are things charpy does rather than one of them
 // being a call it omits.
-func (s *Stdio) Close() error { return s.w.Close() }
+func (s *Stdio) Close() error {
+	s.closed.Store(true)
+	return s.w.Close()
+}
+
+// Closed reports whether Close has been called: whether charpy has already
+// ended this stream, before its sender did.
+func (s *Stdio) Closed() bool { return s.closed.Load() }

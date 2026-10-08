@@ -211,6 +211,15 @@ func CappedDetail(dir Direction, read, limit int, prefix []byte) map[string]any 
 	}
 }
 
+// CloseErrorDetail is CloseDetail for a stream that ended on a read error
+// charpy did not cause, with the error's text: who closed is exactly what the
+// error cannot say, so the reason is error and the text is what there is.
+func CloseErrorDetail(bytesWritten int, err error) map[string]any {
+	d := CloseDetail(CloseError, bytesWritten)
+	d["error"] = err.Error()
+	return d
+}
+
 // AppliedDetail builds the detail a fault_applied event must carry. The
 // direction is the way the frame the fault acted on was travelling, which
 // names the fault's recipient: a damaged frame is a question put to whoever

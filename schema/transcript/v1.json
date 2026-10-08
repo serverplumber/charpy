@@ -310,7 +310,8 @@
                 "properties": {
                   "reason": {
                     "enum": ["peer_close", "charpy_close", "subject_close", "timeout", "error", "frame_cap"]
-                  }
+                  },
+                  "error": { "type": "string" }
                 }
               }
             },

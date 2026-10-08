@@ -229,6 +229,17 @@ func (b *Builder) QuestionFailed(question, why string) *Builder {
 	return b
 }
 
+// StreamError records, on the current connection, a stream that ended on a
+// read error charpy did not cause.
+func (b *Builder) StreamError(why string) *Builder {
+	b.w.Event(transcript.Event{
+		Kind: transcript.StreamClose, Face: b.face, Transport: transcript.TransportStdio,
+		ClientID: "c0", SessionID: "s-1", ConnID: b.conn,
+		Detail: transcript.CloseErrorDetail(0, errors.New(why)),
+	})
+	return b
+}
+
 // CappedFromSubject records charpy stopping a frame of the subject's at the
 // size cap, on the current connection.
 func (b *Builder) CappedFromSubject() *Builder { return b.capped(b.dirFromSubject()) }

@@ -206,17 +206,35 @@ func (h *Hostile) Run(ctx context.Context) error {
 }
 
 // relay carries one direction. A gate, where there is one, is passed for every
-// frame, and a shut gate ends the relay. So does a frame past wire.MaxFrame,
-// which is recorded, and the rest of from drained unrelayed, as the stdio
-// shim's is (Shim.capped says why it is neither closed nor left unread).
+// frame, and a shut gate ends the relay. How the relay ended is recorded as the
+// stdio shim's is (Shim.ended): a frame past wire.MaxFrame, with the rest of
+// from drained unrelayed; a read error; or the sender's end of stream.
+//
+// ctx ending is charpy ending the run, and a read that ends with it is no event
+// of its own. That covers both of charpy's own closes: the run cancels ctx
+// before it closes the reference server's output, and the gate shuts only on a
+// signal -- a shut gate returns from the loop with no error, which would
+// otherwise read as the client closing.
 func (h *Hostile) relay(ctx context.Context, from io.Reader, to *wire.Stdio, dir transcript.Direction, faulted bool, g *gate) {
 	sc := wire.NewLineScanner(from)
 	defer func() {
+		err := sc.Err()
 		var tl *wire.FrameTooLarge
-		if errors.As(sc.Err(), &tl) {
+		switch {
+		case errors.As(err, &tl):
 			h.x.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
 			h.x.StreamClose(transcript.FrameCap, int(to.Written()))
 			go func() { _, _ = io.Copy(io.Discard, from) }()
+		case ctx.Err() != nil:
+		case err != nil:
+			h.x.Event(transcript.StreamClose, transcript.CloseErrorDetail(int(to.Written()), err))
+		case !to.Closed():
+			// The subject is the client: what it sends is c2s.
+			reason := transcript.PeerClose
+			if dir == transcript.C2S {
+				reason = transcript.SubjectClose
+			}
+			h.x.StreamClose(reason, int(to.Written()))
 		}
 	}()
 

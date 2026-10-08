@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -211,6 +212,11 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 		Detail: transcript.CloseDetail(transcript.FrameCap, 0),
 	})
 	r.w.Event(transcript.Event{
+		Kind: transcript.StreamClose, Face: transcript.Downstream, Transport: transcript.TransportStdio,
+		ConnID: "c-05",
+		Detail: transcript.CloseErrorDetail(12, errors.New("read |0: input/output error")),
+	})
+	r.w.Event(transcript.Event{
 		Kind: transcript.Probe, Face: transcript.Downstream, Transport: transcript.TransportHTTP,
 		Detail: transcript.ProbeDetail("ping", transcript.ProbeOK, clock.FromMillis(120)),
 	})
@@ -231,8 +237,8 @@ func TestWrittenLinesValidateAgainstTheSchema(t *testing.T) {
 	})
 
 	lines := r.close(t)
-	if len(lines) != 10 {
-		t.Fatalf("wrote %d lines, want 10", len(lines))
+	if len(lines) != 11 {
+		t.Fatalf("wrote %d lines, want 11", len(lines))
 	}
 	validateAll(t, sch, lines)
 }

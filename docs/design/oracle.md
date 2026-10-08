@@ -338,6 +338,7 @@ subject.** Walking forward from the fault, on its connection:
 | the subject sent a frame past charpy's 4 MiB read cap | `OBSERVED` — how much charpy read, and how long after |
 | a request after the fault was still open when the run ended | `OBSERVED` — did not answer, and for how long |
 | nothing asked the subject anything after the fault | `INCONCLUSIVE`, `nothing-asked-after-fault` |
+| the stream broke on a read error charpy did not cause | `INCONCLUSIVE`, `stream-error`, with the error's text |
 
 A request asked _before_ the fault does not count even if it is answered
 after: the question is whether the subject still serves, and that exchange

@@ -85,6 +85,20 @@ func react(rep *oracle.Report, t *transcript.Transcript, class transcript.Class,
 			rep.Add(f)
 			return
 		}
+		if e := en.Event; e != nil && e.EventKind == transcript.StreamClose &&
+			sameConn(e.ConnID, applied.ConnID) && str(e.Detail["reason"]) == string(transcript.CloseError) {
+			// The stream broke on a read error charpy did not cause, and the
+			// error cannot say whose doing it was. Reading on would call
+			// whatever was asked unanswered; the honest result is that this run
+			// cannot say.
+			f.Verdict = oracle.Inconclusive
+			f.Seq = e.Seq
+			f.Summary = "the stream broke on a read error after the fault"
+			f.Detail = fmt.Sprintf("%s, %s after the fault", str(e.Detail["error"]), ms(e.TMonoNS-applied.TMonoNS))
+			f.Reason = "stream-error"
+			rep.Add(f)
+			return
+		}
 		if e := en.Event; e != nil && e.EventKind == transcript.FrameCapped &&
 			sameConn(e.ConnID, applied.ConnID) && subjectSent(class, e) {
 			// The subject began a frame and did not stop. Whatever it was

@@ -315,3 +315,21 @@ func TestAPeersCappedFrameIsNotTheSubjects(t *testing.T) {
 		t.Errorf("summary = %q", c.Summary)
 	}
 }
+
+// A stream that broke on a read error after the fault leaves the run unable
+// to say what the subject did: not an answer, and not a silence either.
+func TestAStreamErrorAfterTheFaultIsInconclusive(t *testing.T) {
+	tr := oracletest.New(t, transcript.ClassServer).
+		FaultToSubject().
+		ToSubject(pingReq).
+		StreamError("read |0: input/output error").
+		Done()
+
+	f := only(t, reactions(t, tr))
+	if f.Verdict != oracle.Inconclusive || f.Reason != "stream-error" {
+		t.Errorf("got %s %q, want INCONCLUSIVE stream-error", f.Verdict, f.Reason)
+	}
+	if !strings.Contains(f.Detail, "input/output error") {
+		t.Errorf("detail = %q, want the error's text", f.Detail)
+	}
+}

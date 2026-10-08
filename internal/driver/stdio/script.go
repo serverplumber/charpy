@@ -149,6 +149,7 @@ func (s *Script) Run(ctx context.Context) error {
 
 	sess, err := s.peer.Connect(sctx)
 	if err != nil {
+		s.shim.ClosingInput()
 		_ = s.peer.Close()
 		<-relayed
 		// A fault that lands on the handshake breaks the peer's own Connect,
@@ -179,6 +180,7 @@ func (s *Script) Run(ctx context.Context) error {
 	// Closing the session first lets the peer say goodbye over a wire that is
 	// still up; closing the pipes is what ends the relays.
 	_ = sess.Close()
+	s.shim.ClosingInput()
 	_ = s.peer.Close()
 
 	relayErr := <-relayed

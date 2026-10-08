@@ -445,6 +445,15 @@ from a bare close is not possible. `frame_cap` is charpy's hand but not a
 fault's: the stream was closed because a unit on it passed the read cap,
 and a bare `charpy_close` would credit a case with it.
 
+Over stdio every relay records how it ended, once per direction. The
+sender's end of stream is `subject_close` or `peer_close`, unless charpy had
+already closed that direction for a fault. A read error charpy did not
+cause is `error`, with the error's text in `detail.error`: who closed is
+exactly what the error cannot say. charpy ending the run -- its context
+done, or the scripted driver closing its own peer's pipe -- records nothing
+here, because `subject_exit` or the run's end already says how it ended,
+and the read error charpy's own close can cause is not a broken stream.
+
 A frame past the read cap is a finding about its sender, never a failed
 run (`decisions.md` ADR-017). Every transport reads to the same cap. Over
 HTTP, charpy records the `frame_capped` event, closes the subject's body,

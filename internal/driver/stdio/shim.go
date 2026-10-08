@@ -113,6 +113,10 @@ type Shim struct {
 	faulting sync.Mutex
 	applied  int
 	broken   bool
+
+	// inputClosing is set when charpy is about to close the shim's input
+	// itself, so the read error that follows is charpy's teardown.
+	inputClosing atomic.Bool
 }
 
 // New prepares a shim. Nothing is spawned until Run.
@@ -184,7 +188,9 @@ func (s *Shim) Run(ctx context.Context) error {
 	// rewrite.
 	go func() {
 		defer wg.Done()
-		s.relay(s.o.In, s.toSubj, transcript.C2S)
+		s.relay(s.o.In, s.toSubj, transcript.C2S, func() bool {
+			return s.inputClosing.Load() || ctx.Err() != nil
+		})
 		// The client stopped talking; let the subject see the end of its
 		// input rather than hanging on a pipe nobody will write to.
 		_ = s.toSubj.Close()
@@ -192,7 +198,9 @@ func (s *Shim) Run(ctx context.Context) error {
 
 	go func() {
 		defer wg.Done()
-		s.relay(s.subjOut, s.toPeer, transcript.S2C)
+		// Once the run's context is done, exec has killed the subject, and
+		// the end of its output is charpy's doing.
+		s.relay(s.subjOut, s.toPeer, transcript.S2C, func() bool { return ctx.Err() != nil })
 		// The subject stopped talking -- it exited, or closed its output. Let
 		// the peer see the end of its input too: a request it is waiting on
 		// will never be answered, and a peer left waiting sits out its whole
@@ -281,10 +289,11 @@ func signalOf(st *os.ProcessState) (string, bool) {
 }
 
 // relay reads frames from one side and puts them on the other, offering each
-// to the matcher on the way. A frame past wire.MaxFrame ends it (capped).
-func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
+// to the matcher on the way. ours reports whether charpy is the one ending the
+// read, which ended uses to record how the relay ended.
+func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction, ours func() bool) {
 	sc := wire.NewLineScanner(from)
-	defer s.capped(sc, from, dir, to)
+	defer s.ended(sc, from, dir, to, ours)
 
 	for sc.Scan() {
 		raw := sc.Bytes()
@@ -313,28 +322,59 @@ func (s *Shim) relay(from io.Reader, to *wire.Stdio, dir transcript.Direction) {
 	}
 }
 
-// capped records a frame past wire.MaxFrame, if that is what ended a relay,
-// and marks the stream broken: the caller closes it, and there is no session
-// left on it to ask.
+// ClosingInput tells the shim that charpy is about to close the shim's input
+// itself, as the scripted driver does with its peer's pipe at the end of a
+// run. The read error that follows is charpy's teardown, not the peer's.
+func (s *Shim) ClosingInput() { s.inputClosing.Store(true) }
+
+// ended records how a relay's read ended, so that no relay ends silently:
 //
-// charpy stops relaying but not reading: the rest of from is drained and
+//   - A frame past wire.MaxFrame: frame_capped, and the stream closed with
+//     reason frame_cap (below).
+//   - charpy ending the run: nothing more. subject_exit, or the script, says
+//     how the run ended, and a read that ended with it is no event of its own.
+//   - A read error: the stream closed with reason error and the error's text.
+//     Whose doing it was is what the error cannot say.
+//   - The sender's end of stream: the stream closed by the sender, unless
+//     charpy already closed it -- a fault's then = close -- and recorded that.
+//
+// After a cap or an error the stream is broken: the caller closes it, and
+// there is no session left on it to ask.
+//
+// On a cap, charpy stops relaying but not reading: the rest of from is drained and
 // dropped. Closing the pipe would SIGPIPE a sender still writing, and the exit
 // would be charpy's doing read as the subject's. Leaving it unread would block
 // a sender whose oversized line does end, so it could never reach the end of
 // its input and exit on its own. Drained, a subject that stops exits as
 // itself, and one that never stops ends at the run's deadline, killed by
 // charpy and recorded so.
-func (s *Shim) capped(sc *wire.LineScanner, from io.Reader, dir transcript.Direction, to *wire.Stdio) {
+func (s *Shim) ended(sc *wire.LineScanner, from io.Reader, dir transcript.Direction, to *wire.Stdio, ours func() bool) {
+	err := sc.Err()
 	var tl *wire.FrameTooLarge
-	if !errors.As(sc.Err(), &tl) {
-		return
+	switch {
+	case errors.As(err, &tl):
+		s.markBroken()
+		s.x.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
+		s.x.StreamClose(transcript.FrameCap, int(to.Written()))
+		go func() { _, _ = io.Copy(io.Discard, from) }()
+	case ours():
+	case err != nil:
+		s.markBroken()
+		s.x.Event(transcript.StreamClose, transcript.CloseErrorDetail(int(to.Written()), err))
+	case !to.Closed():
+		// The subject is the server: what it sends is s2c.
+		reason := transcript.PeerClose
+		if dir == transcript.S2C {
+			reason = transcript.SubjectClose
+		}
+		s.x.StreamClose(reason, int(to.Written()))
 	}
+}
+
+func (s *Shim) markBroken() {
 	s.faulting.Lock()
 	s.broken = true
 	s.faulting.Unlock()
-	s.x.Event(transcript.FrameCapped, transcript.CappedDetail(dir, tl.Read, wire.MaxFrame, tl.Prefix))
-	s.x.StreamClose(transcript.FrameCap, int(to.Written()))
-	go func() { _, _ = io.Copy(io.Discard, from) }()
 }
 
 // Askable reports whether a follow-up question can be put to the subject on
